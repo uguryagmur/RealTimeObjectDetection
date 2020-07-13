@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
-from util import predict_transform
+from src.util import predict_transform
 
 
 class MaxPoolStride1(nn.Module):

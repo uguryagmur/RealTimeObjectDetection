@@ -36,7 +36,7 @@ def arg_parse():
     parser.add_argument("--cfg", dest='cfg_file', help="Config file",
                         default="cfg/yolov3.cfg", type=str)
     parser.add_argument("--weights", dest='weights_file', help="weightsfile",
-                        default="yolov3.weights", type=str)
+                        default="weights/yolov3.weights", type=str)
     parser.add_argument("--reso", dest='reso',
                         help="""Input resolution of the network. Increase to
                         increase accuracy. Decrease to increase speed""",
@@ -230,7 +230,7 @@ for i in range(output.shape[0]):
 
 output_recast = time.time()
 class_load = time.time()
-colors = pkl.load(open("pallete", "rb"))
+colors = pkl.load(open("weights/pallete", "rb"))
 
 draw = time.time()
 
