@@ -41,8 +41,22 @@ def arg_parse():
                         help="""Input resolution of the network. Increase to
                         increase accuracy. Decrease to increase speed""",
                         default="416", type=str)
+    parser.add_argument("--CUDA", dest="CUDA",
+                        help="GPU Acceleration Enable Flag (true/false)",
+                        default="True", type=str)
 
     return parser.parse_args()
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
 def box_write(x, results) -> np.ndarray:
@@ -75,7 +89,9 @@ batch_size = int(args.bs)
 confidence = float(args.confidence)
 nms_thesh = float(args.nms_thresh)
 start = 0
-CUDA = torch.cuda.is_available()
+CUDA = str2bool(torch.cuda.is_available() and str2bool(args.CUDA))
+print(type(CUDA))
+assert type(CUDA) == bool
 metrics = []
 
 num_classes = 80
@@ -84,7 +100,7 @@ classes = load_classes("data/coco.names")
 
 # set up the darknet
 print("Loading network.....")
-model = Darknet(args.cfg_file)
+model = Darknet(args.cfg_file, CUDA)
 model.load_weights(args.weights_file)
 print("Network successfully loaded")
 

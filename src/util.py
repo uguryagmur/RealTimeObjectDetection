@@ -57,7 +57,8 @@ def bbox_iou(box1, box2) -> torch.Tensor:
     return iou
 
 
-def predict_transform(prediction, inp_dim, anchors, num_class) -> torch.Tensor:
+def predict_transform(prediction, inp_dim, anchors, num_class,
+                      CUDA) -> torch.Tensor:
     """
     Returns the prediction tensor with respect to the output of the YOLO
     Detection Layer
@@ -68,8 +69,6 @@ def predict_transform(prediction, inp_dim, anchors, num_class) -> torch.Tensor:
         anchors (torch.Tensor) : anchors of the Darknet
         num_class (int) : number of classes can be detected by Darknet
     """
-    # adjustment of the CUDA flag
-    CUDA = torch.cuda.is_available()
 
     batch_size = prediction.size(0)
     stride = inp_dim // prediction.size(2)
