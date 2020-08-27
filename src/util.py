@@ -5,28 +5,7 @@ import numpy as np
 import cv2
 
 
-def unique(tensor) -> torch.Tensor:
-    """
-    Returns the sorted unique elements of an array like numpy.unique function.
-    There are three optional outputs in addition to the unique elements:
-        * the indices of the input array that give the unique values
-        * the indices of the unique array that reconstruct the input array
-        * the number of times each unique value comes up in the input array
-
-    Arguments:
-        tensor (torch.Tensor) : input tensor to operate unique function
-    """
-
-    tensor_np = tensor.cpu().numpy()
-    unique_np = np.unique(tensor_np)
-    unique_tensor = torch.from_numpy(unique_np)
-
-    tensor_res = tensor.new(unique_tensor.shape)
-    tensor_res.copy_(unique_tensor)
-    return tensor_res
-
-
-def bbox_iou(box1, box2) -> torch.Tensor:
+def bbox_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
     """
     Returns the IoU of two bounding boxes
 
@@ -57,6 +36,7 @@ def bbox_iou(box1, box2) -> torch.Tensor:
     return iou
 
 
+# this function is fixed and won't cut the autograd backward graph
 def predict_transform(prediction, inp_dim, anchors, num_class,
                       CUDA) -> torch.Tensor:
     """
@@ -81,6 +61,7 @@ def predict_transform(prediction, inp_dim, anchors, num_class,
     prediction = prediction.transpose(1, 2).contiguous()
     prediction = prediction.view(
         batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
+    # decreasing the size of the anchor boxes to match with end of the network
     anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
 
     # sigmoid the  centre_X, centre_Y. and object confidencce
@@ -137,7 +118,6 @@ def write_results(prediction, confidence,
     """
     conf_mask = (prediction[:, :, 4] > confidence).float().unsqueeze(2)
     prediction = prediction*conf_mask
-
     # transforming box attributes to corner coordinates
     box_corner = prediction.new(prediction.shape)
     box_corner[:, :, 0] = (prediction[:, :, 0] - prediction[:, :, 2]/2)
@@ -154,6 +134,7 @@ def write_results(prediction, confidence,
     for ind in range(batch_size):
         image_pred = prediction[ind]
 
+        # generating the max confidence sequence
         max_conf, max_conf_score = torch.max(image_pred[:, 5:5 +
                                                         num_class], 1)
         max_conf = max_conf.float().unsqueeze(1)
@@ -164,16 +145,16 @@ def write_results(prediction, confidence,
         non_zero_ind = (torch.nonzero(image_pred[:, 4]))
         try:
             image_pred_ = image_pred[non_zero_ind.squeeze(), :].view(-1, 7)
-        except:
+        except IndexError:
             continue
 
+        # if there is no detection for this batch image
         if image_pred_.shape[0] == 0:
             continue
-#
 
         # get the various classes detected in the image
         # -1 index holds the class index
-        img_classes = unique(image_pred_[:, -1])
+        img_classes = torch.unique(image_pred_[:, -1])
 
         for cls in img_classes:
             # perform NMS
@@ -195,10 +176,7 @@ def write_results(prediction, confidence,
                 try:
                     ious = bbox_iou(image_pred_class[i].unsqueeze(
                                     0), image_pred_class[i+1:])
-                except ValueError:
-                    break
-
-                except IndexError:
+                except (IndexError, ValueError):
                     break
 
                 # zero out all the detections that have IoU > treshhold
@@ -223,7 +201,7 @@ def write_results(prediction, confidence,
 
     try:
         return output
-    except:
+    except NameError:
         return 0
 
 
@@ -258,13 +236,17 @@ def prep_image(img, inp_dim) -> torch.Tensor:
         img (np.ndarray) : input image as numpy array form
         inp_dim (list) : input image dimensions
     """
+
+    # scaling image by protecting the aspect-ratio
     img = (letterbox_image(img, (inp_dim, inp_dim)))
+    # transpose for the pytorch tensor
     img = img[:, :, ::-1].transpose((2, 0, 1)).copy()
+    # normalization of the image
     img = torch.from_numpy(img).float().div(255.0).unsqueeze(0)
     return img
 
 
-def load_classes(names_file_path) -> list:
+def load_classes(names_file_path: str) -> list:
     """Load the classes from dataset file
 
     Arguments:

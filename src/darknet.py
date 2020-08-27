@@ -1,3 +1,4 @@
+"""Darknet Neural Network class"""
 from __future__ import division
 
 import torch
@@ -153,9 +154,6 @@ class Darknet(nn.Module):
         load_weights(weight_file_path) :
             load pre-trained weights of the Darknet class
 
-        save_weights(saved_file_path, cutoff=0) :
-            saves the current weights of the Darknet class to given file path
-
         parse_cfg(cfg_file_path) -> blocks (list) :
             read the cfg file of the Darknet and returns the block list of
             the architecture of the Darknet network
@@ -253,12 +251,12 @@ class Darknet(nn.Module):
                 num_classes = int(modules[i]["classes"])
 
                 # output the result
-                x = x.data
+                # x = x.data
                 global CUDA
                 x = predict_transform(x, inp_dim, anchors, num_classes,
                                       self.CUDA)
 
-                if type(x) == int:
+                if type(x.data) == int:
                     continue
 
                 if not write:
@@ -273,7 +271,7 @@ class Darknet(nn.Module):
         # if there is no detection it returns 0
         try:
             return detections
-        except:
+        except NameError:
             return 0
 
     def load_weights(self, weight_file_path: str):
@@ -308,7 +306,7 @@ class Darknet(nn.Module):
                 model = self.module_list[i]
                 try:
                     batch_normalize = int(self.blocks[i+1]["batch_normalize"])
-                except:
+                except KeyError:
                     batch_normalize = 0
 
                 conv = model[0]
@@ -374,69 +372,6 @@ class Darknet(nn.Module):
                 conv_weights = conv_weights.view_as(conv.weight.data)
                 conv.weight.data.copy_(conv_weights)
 
-    def save_weights(self, saved_file_path: str, cutoff=0):
-        """Saves the weights of the Darknet network
-
-        --------
-        Arguments:
-            saved_file_path (str) : path of the weight file to save
-            cutoff (int) : number of layers to cut from begining of the list
-        """
-
-        if cutoff <= 0:
-            cutoff = len(self.blocks) - 1
-
-        fp = open(saved_file_path, 'wb')
-
-        # attach the header at the top of the file
-        self.header[3] = self.seen
-        header = self.header
-
-        header = header.numpy()
-        header.tofile(fp)
-
-        # save the weights
-        for i in range(len(self.module_list)):
-            module_type = self.blocks[i+1]["type"]
-
-            if (module_type) == "convolutional":
-                model = self.module_list[i]
-                try:
-                    batch_normalize = int(self.blocks[i+1]["batch_normalize"])
-                except:
-                    batch_normalize = 0
-
-                conv = model[0]
-
-                if (batch_normalize):
-                    bn = model[1]
-
-                    # if the parameters are on GPU, convert them back to CPU
-                    # we don't convert the parameter to GPU
-                    # instead. we copy the parameter and then convert it to CPU
-                    cpu(bn.bias.data).numpy().tofile(fp)
-                    cpu(bn.weight.data).numpy().tofile(fp)
-                    cpu(bn.running_mean).numpy().tofile(fp)
-                    cpu(bn.running_var).numpy().tofile(fp)
-
-                else:
-                    cpu(conv.bias.data).numpy().tofile(fp)
-
-                # let us save the weights for the Convolutional layers
-                cpu(conv.weight.data).numpy().tofile(fp)
-
-    # @staticmethod
-    # def get_test_input():
-    #     img = cv2.imread("dog-cycle-car.png")
-    #     img = cv2.resize(img, (416, 416))  # Resize to the input dimension
-    #     # BGR -> RGB | H X W C -> C X H X W
-    #     img_ = img[:, :, ::-1].transpose((2, 0, 1))
-    #     # Add a channel at 0 (for batch) | Normalise
-    #     img_ = img_[np.newaxis, :, :, :]/255.0
-    #     img_ = torch.from_numpy(img_).float()  # Convert to float
-    #     img_ = Variable(img_)                     # Convert to Variable
-    #     return img_
-
     @staticmethod
     def parse_cfg(cfg_file_path):
         """Configure the Darknet architecture with respect to the given cfg
@@ -494,27 +429,27 @@ class Darknet(nn.Module):
 
         output_filters = []
 
-        for x in blocks:
+        for block in blocks:
             module = nn.Sequential()
 
-            if (x["type"] == "net"):
+            if (block["type"] == "net"):
                 continue
 
             # if it's a convolutional layer
-            if (x["type"] == "convolutional"):
+            if (block["type"] == "convolutional"):
                 # get the info about the layer
-                activation = x["activation"]
+                activation = block["activation"]
                 try:
-                    batch_normalize = int(x["batch_normalize"])
+                    batch_normalize = int(block["batch_normalize"])
                     bias = False
-                except:
+                except (ValueError, KeyError):
                     batch_normalize = 0
                     bias = True
 
-                filters = int(x["filters"])
-                padding = int(x["pad"])
-                kernel_size = int(x["size"])
-                stride = int(x["stride"])
+                filters = int(block["filters"])
+                padding = int(block["pad"])
+                kernel_size = int(block["size"])
+                stride = int(block["stride"])
 
                 if padding:
                     pad = (kernel_size - 1) // 2
@@ -540,23 +475,24 @@ class Darknet(nn.Module):
             # if it's an upsampling layer
             # we use Bilinear2dUpsampling
 
-            elif (x["type"] == "upsample"):
-                stride = int(x["stride"])
+            elif (block["type"] == "upsample"):
+                stride = int(block["stride"])
                 # upsample = Upsample(stride)
-                upsample = nn.Upsample(scale_factor=2, mode="bilinear")
+                upsample = nn.Upsample(scale_factor=2, mode="bilinear",
+                                       align_corners=False)
                 module.add_module("upsample_{}".format(index), upsample)
 
             # if it is a route layer
-            elif (x["type"] == "route"):
-                x["layers"] = x["layers"].split(',')
+            elif (block["type"] == "route"):
+                block["layers"] = block["layers"].split(',')
 
                 # start  of a route
-                start = int(x["layers"][0])
+                start = int(block["layers"][0])
 
                 # end, if there exists one.
                 try:
-                    end = int(x["layers"][1])
-                except:
+                    end = int(block["layers"][1])
+                except IndexError:
                     end = 0
 
                 # positive anotation
@@ -577,14 +513,13 @@ class Darknet(nn.Module):
                     filters = output_filters[index + start]
 
             # shortcut corresponds to skip connection
-            elif x["type"] == "shortcut":
-                from_ = int(x["from"])
+            elif block["type"] == "shortcut":
                 shortcut = EmptyLayer()
                 module.add_module("shortcut_{}".format(index), shortcut)
 
-            elif x["type"] == "maxpool":
-                stride = int(x["stride"])
-                size = int(x["size"])
+            elif block["type"] == "maxpool":
+                stride = int(block["stride"])
+                size = int(block["size"])
                 if stride != 1:
                     maxpool = nn.MaxPool2d(size, stride)
                 else:
@@ -593,11 +528,11 @@ class Darknet(nn.Module):
                 module.add_module("maxpool_{}".format(index), maxpool)
 
             # YOLO is the detection layer
-            elif x["type"] == "yolo":
-                mask = x["mask"].split(",")
+            elif block["type"] == "yolo":
+                mask = block["mask"].split(",")
                 mask = [int(x) for x in mask]
 
-                anchors = x["anchors"].split(",")
+                anchors = block["anchors"].split(",")
                 anchors = [int(a) for a in anchors]
                 anchors = [(anchors[i], anchors[i+1])
                            for i in range(0, len(anchors), 2)]
