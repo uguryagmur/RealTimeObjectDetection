@@ -41,7 +41,7 @@ class DarknetTrainer():
         self.batch_size = batch_size
         self.resolution = resolution
         self.criterion = self.darknet_loss
-        self.darknet = Darknet(cfg_file, CUDA=self.CUDA)
+        self.darknet = Darknet(cfg_file, CUDA=self.CUDA, TRAIN=True)
         self.optimizer = optim.Adam(self.darknet.parameters())
         self.history = dict()
         if cfg_file[-8:-4] == 'tiny':
@@ -85,7 +85,7 @@ class DarknetTrainer():
     @staticmethod
     def conf_masking(prediction: torch.Tensor,
                      confidence: float) -> torch.Tensor:
-        prediction[:, :, 2:4] = prediction[:, :, 2:4].sqrt()
+        # prediction[:, :, 2:4] = prediction[:, :, 2:4].sqrt()
         conf_mask = (prediction[:, :, 4] > confidence).float().unsqueeze(2)
         prediction *= conf_mask
         return prediction
@@ -96,11 +96,102 @@ class DarknetTrainer():
                                 ind.float()), dim=2)
         return prediction
 
+    # elegant code @.@
     @staticmethod
     def row_sort(X: torch.Tensor, descending=True) -> torch.Tensor:
         X = X[torch.arange(X.shape[0]).reshape(X.shape[0], 1).repeat(
             1, X.shape[1]), X[:, :, 0].argsort(dim=1, descending=True)]
         return X
+
+    @staticmethod
+    def xyxy2xywh(box: torch.Tensor) -> torch.Tensor:
+        output = torch.zeros(box.size())
+        output[0] = (box[2] + box[0])/2
+        output[1] = (box[3] + box[1])/2
+        output[2] = box[2] - box[0]
+        output[3] = box[3] - box[1]
+        box[:4] = output[:4]
+        return box
+
+    # to be continue
+    def activation_pass(self, prediction: torch.Tensor) -> torch.Tensor:
+        '''DOCSTRING will be added later'''
+        anchors = self.darknet.anchors
+        ind = prediction.size()
+        prediction = prediction.view(ind[0], len(anchors), -1,
+                                     ind[2], ind[3]).contiguous()
+        prediction[:, :, :2, :, :] = torch.sigmoid(prediction[:, :, :2, :, :])
+        prediction[:, :, 4:, :, :] = torch.sigmoid(prediction[:, :, 4:, :, :])
+        prediction[:, 0, 2, :, :] = torch.exp(prediction[:, 0, 2,
+                                                         :, :]) * anchors[0][0]
+        prediction[:, 0, 3, :, :] = torch.exp(prediction[:, 0, 3,
+                                                         :, :]) * anchors[0][1]
+        prediction[:, 1, 2, :, :] = torch.exp(prediction[:, 1, 2,
+                                                         :, :]) * anchors[1][0]
+        prediction[:, 1, 3, :, :] = torch.exp(prediction[:, 1, 3,
+                                                         :, :]) * anchors[1][1]
+        prediction[:, 2, 2, :, :] = torch.exp(prediction[:, 2, 2,
+                                                         :, :]) * anchors[2][0]
+        prediction[:, 2, 3, :, :] = torch.exp(prediction[:, 2, 3,
+                                                         :, :]) * anchors[2][1]
+        return prediction.view(ind).contiguous()
+
+    # to be continue
+    def target_creator(self, bndbox: list,
+                       pred_size: torch.Size) -> torch.Tensor:
+        '''DOCSTRING will be added later'''
+        target = torch.zeros(pred_size)
+        stride = self.resolution / pred_size[-1]
+        anchors = self.darknet.anchors
+        aspect_ratios = [i/j for (i, j) in anchors]
+        for i in range(len(bndbox)):
+            box_channel = torch.zeros(pred_size[1:])
+            for j in range(bndbox[i].size(0)):
+
+                # selecting current box and transform to xywh
+                current = bndbox[i][j]
+                current = self.xyxy2xywh(current)
+
+                # finding best aspect ratio
+                object_asp_ratio = float(current[2]/current[3])
+                ratio_rate = [(i-object_asp_ratio)**2 for i in aspect_ratios]
+                box_select = ratio_rate.index(min(ratio_rate))
+
+                # finding the best anchor box w and h
+                anchor_w, anchor_h = anchors[box_select]
+                anchor_h = float(anchor_h)
+                anchor_w = float(anchor_w)
+
+                # grid coordinates for the current bounding boxes
+                # print('xywh= ', current)
+                x = int(current[0]/stride)
+                y = int(current[1]/stride)
+
+                # x and y values for the target tensor
+                x_ = float(((current[0]/stride) - x))
+                y_ = float(((current[1]/stride) - y))
+
+                # w and h values for the target tensor
+                w_ = float(current[2]/anchor_w)
+                h_ = float(current[3]/anchor_h)
+                data_list = [x_, y_, w_, h_]
+                data_list.extend([1.0, 1.0])
+                data_list.extend([0]*79)
+                # print('--------o--------')
+                # print(data_list)
+                # print('--------o--------')
+                # print('DATA')
+                # print('x = ', x)
+                # print('y = ', y)
+                # print('x_ = ', x_)
+                # print('y_ = ', y_)
+                # print('w_ = ', w_)
+                # print('h_ = ', h_)
+                # print('place = ', box_select)
+                box_channel[box_select*85:(box_select+1)*85,
+                            x, y] = torch.FloatTensor(data_list)
+            target[i] = box_channel
+        return target
 
     def darknet_loss(self, prediction: torch.Tensor,
                      target: tuple) -> torch.Tensor:
@@ -170,22 +261,32 @@ class DarknetTrainer():
                 self.optimizer.zero_grad()
                 prediction = self.darknet(batch_data)
                 # t1 = time.time()
-                prediction = self.conf_masking(prediction, confidence=0.6)
+                target = self.target_creator(bndbox, prediction.size())
+                prediction = self.activation_pass(prediction)
+                print(prediction[torch.nonzero(prediction, as_tuple=True)])
+                if self.CUDA:
+                    target = target.cuda()
+                # print(target[target.nonzero(as_tuple=True)])
+
+                # boundary
+                # prediction = self.conf_masking(prediction, confidence=0.6)
                 # t2 = time.time()
-                prediction = self.pred_processor(prediction)
+                # prediction = self.pred_processor(prediction)
                 # t3 = time.time()
-                prediction = self.row_sort(prediction)
+                # prediction = self.row_sort(prediction)
                 # t4 = time.time()
-                loss = self.criterion(prediction, bndbox)
-                # t5 = time.time()
+                # print(prediction)
+                loss = nn.functional.mse_loss(prediction, target,
+                                              reduction='sum')
+                # t3 = time.time()
                 loss.backward()
-                # t6 = time.time()
+                # t4 = time.time()
                 self.optimizer.step()
-                # t7 = time.time()
-                # print('masking time= ', t2 - t1)
-                # print('processor time= ', t3 - t2)
-                # print('sort time= ', t4 - t3)
-                # print('loss time= ', t5 - t4)
+                # t5 = time.time()
+                # print('target time= ', t2 - t1)
+                # print('loss time= ', t3 - t2)
+                # print('backward time= ', t4 - t3)
+                # print('step time= ', t5 - t4)
                 # print('backward time= ', t6 - t5)
                 # print('step time= ', t7 - t6)
 
@@ -214,10 +315,14 @@ class DarknetTrainer():
 
                 with torch.no_grad():
                     val_out = self.darknet(valid_data)
-                    val_out = self.conf_masking(val_out, confidence=0.6)
-                    val_out = self.pred_processor(val_out)
-                    val_out = self.row_sort(val_out)
-                    loss = self.criterion(val_out, bndbox)
+                    target = self.target_creator(bndbox, val_out.size())
+                    if self.CUDA:
+                        target = target.cuda()
+                    # val_out = self.conf_masking(val_out, confidence=0.6)
+                    # val_out = self.pred_processor(val_out)
+                    # val_out = self.row_sort(val_out)
+                    # loss = self.criterion(val_out, bndbox)
+                    loss = nn.functional.mse_loss(val_out, target)
                     val_loss += loss.item()
             print('Epoch number = {0} batch_number = {1}\n'.format(
                 epoch, batch+1))

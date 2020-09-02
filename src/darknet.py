@@ -5,7 +5,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
-from src.util import predict_transform
+try:
+    from src.util import predict_transform
+except ImportError:
+    from util import predict_transform
 
 
 class MaxPoolStride1(nn.Module):
@@ -164,7 +167,7 @@ class Darknet(nn.Module):
                 torch.nn.ModuleList object to build network
     """
 
-    def __init__(self, cfg_file_path, CUDA):
+    def __init__(self, cfg_file_path, CUDA, TRAIN=False):
         """Constructor of the Darknet Class
 
         --------
@@ -177,6 +180,7 @@ class Darknet(nn.Module):
         self.header = torch.IntTensor([0, 0, 0, 0])
         self.seen = 0
         self.CUDA = CUDA
+        self.TRAIN = TRAIN
 
     def get_blocks(self) -> list:
         """Returns the Darknet architecture as a list of dictionary object"""
@@ -243,18 +247,20 @@ class Darknet(nn.Module):
             # detection layer
             elif module_type == 'yolo':
 
-                anchors = self.module_list[i][0].anchors
+                self.anchors = self.module_list[i][0].anchors
+
                 # get the input dimensions
                 inp_dim = int(self.net_info["height"])
 
                 # get the number of classes
-                num_classes = int(modules[i]["classes"])
+                self.num_classes = int(modules[i]["classes"])
 
                 # output the result
-                # x = x.data
                 global CUDA
-                x = predict_transform(x, inp_dim, anchors, num_classes,
-                                      self.CUDA)
+                if self.TRAIN:
+                    return x
+                x = predict_transform(x, inp_dim, self.anchors,
+                                      self.num_classes, self.CUDA)
 
                 if type(x.data) == int:
                     continue
