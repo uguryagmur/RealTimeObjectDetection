@@ -110,11 +110,13 @@ found.""".format(xml_directory, fformat))
         assert isinstance(i, int)
         assert i < len(self.xml_path_list)
         bndbox = self.read_xml(self.xml_path_list[i])
+        img_path = self.data[self.xml_path_list[i]]
+        # print(self.xml_path_list[i], self.data[self.xml_path_list[i]])
+        img = Image.open(img_path)
         if bndbox is not None:
             bndbox = torch.tensor(bndbox)
-        bndbox = self.sort_bboxes(bndbox)
-        img_path = self.data[self.xml_path_list[i]]
-        img = Image.open(img_path)
+            bndbox = (bndbox * float(self.resolution/max(img.size))).long()
+        # bndbox = self.sort_bboxes(bndbox)
         img = np.asarray(img)
         img = prep_image(img, self.resolution)
         return img[0], bndbox
@@ -178,7 +180,9 @@ if __name__ == '__main__':
 VOCdevkit/VOC2012/Annotations'
     img_dir = '/home/adm1n/Datasets/SPAutoencoder/VOC2012'
     DSet = VOCDataset(xml_dir, img_dir)
-    # img, bndbox = DSet.__getitem__(1)
+    img, bndbox = DSet.__getitem__(81)
+    print(bndbox)
+    exit()
     # print(bndbox)
     # print('--------o--------')
     # print(img)
