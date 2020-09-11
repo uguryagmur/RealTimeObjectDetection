@@ -1,4 +1,5 @@
 """Darknet Neural Network class"""
+
 from __future__ import division
 
 import torch
@@ -167,7 +168,7 @@ class Darknet(nn.Module):
                 torch.nn.ModuleList object to build network
     """
 
-    def __init__(self, cfg_file_path, CUDA, TRAIN=False):
+    def __init__(self, cfg_file_path, confidence, CUDA):
         """Constructor of the Darknet Class
 
         --------
@@ -179,8 +180,8 @@ class Darknet(nn.Module):
         self.net_info, self.module_list = self.create_modules(self.blocks)
         self.header = torch.IntTensor([0, 0, 0, 0])
         self.seen = 0
+        self.confidence = confidence
         self.CUDA = CUDA
-        self.TRAIN = TRAIN
 
     def get_blocks(self) -> list:
         """Returns the Darknet architecture as a list of dictionary object"""
@@ -247,7 +248,7 @@ class Darknet(nn.Module):
             # detection layer
             elif module_type == 'yolo':
 
-                self.anchors = self.module_list[i][0].anchors
+                anchors = self.module_list[i][0].anchors
 
                 # get the input dimensions
                 inp_dim = int(self.net_info["height"])
@@ -257,21 +258,25 @@ class Darknet(nn.Module):
 
                 # output the result
                 global CUDA
-                if self.TRAIN:
-                    return x
-                x = predict_transform(x, inp_dim, self.anchors,
-                                      self.num_classes, self.CUDA)
+                x = predict_transform(x, inp_dim,
+                                      anchors,
+                                      self.num_classes,
+                                      self.confidence,
+                                      self.CUDA)
 
                 if type(x.data) == int:
                     continue
 
                 if not write:
+                    self.anchors = anchors.copy()
                     detections = x
                     write = 1
 
                 else:
+                    self.anchors.extend(anchors)
                     detections = torch.cat((detections, x), 1)
 
+                del anchors
                 outputs[i] = outputs[i-1]
 
         # if there is no detection it returns 0

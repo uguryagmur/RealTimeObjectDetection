@@ -5,6 +5,29 @@ import numpy as np
 import cv2
 
 
+def xyxy2xywh(box: torch.Tensor) -> torch.Tensor:
+    output = torch.zeros(box.size())
+    output[0] = (box[2] + box[0])/2
+    output[1] = (box[3] + box[1])/2
+    output[2] = box[2] - box[0]
+    output[3] = box[3] - box[1]
+    box[:4] = output[:4]
+    return box
+
+
+def row_sort(X: torch.Tensor, descending=True) -> torch.Tensor:
+    # elegant code @.@
+    X = X[torch.arange(X.shape[0]).reshape(X.shape[0], 1).repeat(
+          1, X.shape[1]), X[:, :, 0].argsort(dim=1, descending=descending)]
+    return X
+
+
+def confidence_mask(tensor: torch.Tensor, confidence: float) -> torch.Tensor:
+    # confidence masking for direct output of the YOLO layer
+    conf_mask = (tensor[:, :, 4] > confidence).float().unsqueeze(2)
+    return tensor*conf_mask
+
+
 def bbox_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
     """
     Returns the IoU of two bounding boxes
@@ -38,7 +61,7 @@ def bbox_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
 
 # this function is fixed and won't cut the autograd backward graph
 def predict_transform(prediction, inp_dim, anchors, num_class,
-                      CUDA) -> torch.Tensor:
+                      confidence, CUDA, TARGET=False) -> torch.Tensor:
     """
     Returns the prediction tensor with respect to the output of the YOLO
     Detection Layer
@@ -61,13 +84,15 @@ def predict_transform(prediction, inp_dim, anchors, num_class,
     prediction = prediction.transpose(1, 2).contiguous()
     prediction = prediction.view(
         batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
-    # decreasing the size of the anchor boxes to match with end of the network
-    anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
 
-    # sigmoid the  centre_X, centre_Y. and object confidencce
-    prediction[:, :, 0] = torch.sigmoid(prediction[:, :, 0])
-    prediction[:, :, 1] = torch.sigmoid(prediction[:, :, 1])
-    prediction[:, :, 4] = torch.sigmoid(prediction[:, :, 4])
+    if not TARGET:
+        # decreasing the size of the anchor boxes to match with prediction
+        anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
+
+        # sigmoid the  centre_X, centre_Y. and object confidencce
+        prediction[:, :, 0] = torch.sigmoid(prediction[:, :, 0])
+        prediction[:, :, 1] = torch.sigmoid(prediction[:, :, 1])
+        prediction[:, :, 4] = torch.sigmoid(prediction[:, :, 4])
 
     # add the center offsets
     grid = np.arange(grid_size)
@@ -85,26 +110,27 @@ def predict_transform(prediction, inp_dim, anchors, num_class,
 
     prediction[:, :, :2] += x_y_offset
 
-    # log space transform height and the width
-    anchors = torch.FloatTensor(anchors)
+    if not TARGET:
+        # log space transform height and the width
+        anchors = torch.FloatTensor(anchors)
 
-    if CUDA:
-        anchors = anchors.cuda()
+        if CUDA:
+            anchors = anchors.cuda()
 
-    anchors = anchors.repeat(grid_size*grid_size, 1).unsqueeze(0)
-    prediction[:, :, 2:4] = torch.exp(prediction[:, :, 2:4])*anchors
+        anchors = anchors.repeat(grid_size*grid_size, 1).unsqueeze(0)
+        prediction[:, :, 2:4] = torch.exp(prediction[:, :, 2:4])*anchors
 
-    prediction[:, :, 5: 5 +
-               num_class] = torch.sigmoid((prediction[:, :, 5: 5 +
-                                                      num_class]))
+        prediction[:, :, 5: 5 +
+                   num_class] = torch.sigmoid((prediction[:, :, 5: 5 +
+                                                          num_class]))
+        prediction = confidence_mask(prediction, confidence)
 
     prediction[:, :, :4] *= stride
 
     return prediction  # -> shape = [batch, #_of_boxes, 5 + #_of_classes]
 
 
-def write_results(prediction, confidence,
-                  num_class, nms_conf=0.4) -> torch.Tensor:
+def write_results(prediction, num_class, nms_conf=0.4) -> torch.Tensor:
     """
     Returns the results of the predictions of the Darknet
     as bounding boxes and class of the object
@@ -116,8 +142,6 @@ def write_results(prediction, confidence,
         num_class (int) : number of classes can be detected by Darknet
         nms_conf (float) : non-max supression confidence (default=0.4)
     """
-    conf_mask = (prediction[:, :, 4] > confidence).float().unsqueeze(2)
-    prediction = prediction*conf_mask
     # transforming box attributes to corner coordinates
     box_corner = prediction.new(prediction.shape)
     box_corner[:, :, 0] = (prediction[:, :, 0] - prediction[:, :, 2]/2)
