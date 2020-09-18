@@ -1,5 +1,8 @@
 '''VOC and COC Dataloader for Object Detection'''
 
+import matplotlib
+import matplotlib.pyplot as plt
+from PIL import ImageDraw
 import glob
 import json
 import torch
@@ -169,6 +172,9 @@ class COCO(Dataset):
             if category_id < self.deleted_cls[i]:
                 return category_id - ex
             ex += 1
+        if category_id - ex < 0:
+            print('CATEGORY_ID ERROR')
+            exit()
         return category_id - ex
 
     def __len__(self):
@@ -180,19 +186,30 @@ class COCO(Dataset):
             self.img_dir += '/'
         img = self.img_dir + self.img_set[id_]['file_name']
         img = Image.open(img).convert('RGB')
+
+        # obtaining the image size
         max_im_size = max(img.size)
+        w, h = img.size
+        ratio = float(self.resolution/max_im_size)
+
+        # calculating paddings for bboxes
+        pad = [int((max_im_size - w)*ratio/2), int((max_im_size - h)*ratio/2)]
+
         img = np.asarray(img)
         img = prep_image(img, self.resolution).squeeze(0)
         bbox = []
         for obj in self.objs:
             if obj['image_id'] == id_:
-                cls_encoding = [1]
+                cls_encoding = [1.0]
                 cls_encoding.extend([0]*80)
-                cls_encoding[self.coco2yolo(obj['category_id'])] = 1
+                # print(obj['category_id'], self.coco2yolo(obj['category_id']))
+                cls_encoding[self.coco2yolo(obj['category_id'])] = 1.0
                 box = obj['bbox'][:5]
                 box.extend(cls_encoding)
                 box = torch.FloatTensor(box)
-                box[:4] *= float(self.resolution/max_im_size)
+                box[:4] *= ratio
+                box[0] += box[2]/2 + pad[0]
+                box[1] += box[3]/2 + pad[1]
                 bbox.append(box)
 
         if bbox == []:
@@ -229,19 +246,30 @@ COCO/2017/annotations/instances_val2017.json'
     dset = COCO(json_path, img_path)
     # print(dset.__len__())
     # print(Dset.__len__())
-    # img, bbox = dset.__getitem__(13)
-    # print(img.shape)
-    # print('--------o--------')
-    # print(bbox)
+    img, bbox = dset.__getitem__(19)
+    img = img.transpose(0, 1).transpose(1, 2).numpy()
+    img = Image.fromarray(np.uint8(img*255))
+    draw = ImageDraw.Draw(img)
+    for b in bbox:
+        if b[5] != 1:
+            continue
+        box = b[:4].numpy()
+        bbox = [0, 0, 0, 0]
+        bbox[0] = int(box[0] - box[2]/2)
+        bbox[1] = int(box[1] - box[3]/2)
+        bbox[2] = int(box[0] + box[2]/2)
+        bbox[3] = int(box[1] + box[3]/2)
+        draw.rectangle(bbox, outline='red')
+    img.show()
     # img, bbox = Dset.__getitem__(13)
     # print(img.shape)
     # print('--------o--------')
     # print(bbox)
-    dloader = dset.get_dataloader(batch_size=4)
-    diter = iter(dloader)
-    img, bbox = diter.next()
-    print(img.shape)
-    print('--------o--------')
-    print(len(bbox))
-    for img, bbox in diter:
-        pass
+    # dloader = dset.get_dataloader(batch_size=4)
+    # diter = iter(dloader)
+    # img, bbox = diter.next()
+    # print(img.shape)
+    # print('--------o--------')
+    # print(len(bbox))
+    # for img, bbox in diter:
+    # pass

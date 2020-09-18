@@ -168,7 +168,7 @@ class Darknet(nn.Module):
                 torch.nn.ModuleList object to build network
     """
 
-    def __init__(self, cfg_file_path, confidence, CUDA):
+    def __init__(self, cfg_file_path, confidence, CUDA, TRAIN=False):
         """Constructor of the Darknet Class
 
         --------
@@ -182,6 +182,7 @@ class Darknet(nn.Module):
         self.seen = 0
         self.confidence = confidence
         self.CUDA = CUDA
+        self.TRAIN = TRAIN
 
     def get_blocks(self) -> list:
         """Returns the Darknet architecture as a list of dictionary object"""
@@ -262,7 +263,8 @@ class Darknet(nn.Module):
                                       anchors,
                                       self.num_classes,
                                       self.confidence,
-                                      self.CUDA)
+                                      self.CUDA,
+                                      TRAIN=self.TRAIN)
 
                 if type(x.data) == int:
                     continue

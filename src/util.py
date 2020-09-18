@@ -7,12 +7,35 @@ import cv2
 
 def xyxy2xywh(box: torch.Tensor) -> torch.Tensor:
     output = torch.zeros(box.size())
-    output[0] = (box[2] + box[0])/2
-    output[1] = (box[3] + box[1])/2
-    output[2] = box[2] - box[0]
-    output[3] = box[3] - box[1]
-    box[:4] = output[:4]
+    output[..., 0] = (box[..., 2] + box[..., 0])/2
+    output[..., 1] = (box[..., 3] + box[..., 1])/2
+    output[..., 2] = box[..., 2] - box[..., 0]
+    output[..., 3] = box[..., 3] - box[..., 1]
+    box[..., :4] = output[..., :4]
     return box
+
+
+def xywh2xyxy(box: torch.Tensor) -> torch.Tensor:
+    output = torch.zeros(box.size())
+    output[..., 0] = (box[..., 0] - box[..., 2]/2)
+    output[..., 1] = (box[..., 1] - box[..., 3]/2)
+    output[..., 2] = (box[..., 0] + box[..., 2]/2)
+    output[..., 3] = (box[..., 1] + box[..., 3]/2)
+    box[..., :4] = output[..., :4]
+    return box
+
+
+def xywh2YOLOlayer(box: torch.Tensor, stride: float,
+                   anchor: tuple) -> torch.Tensor:
+    x_ = box[..., 0].item()/stride
+    x = int(box[..., 0].item()/stride)
+    y_ = box[..., 1].item()/stride
+    y = int(box[..., 1].item()/stride)
+    x_ -= x
+    y_ -= y
+    w_ = torch.log(box[..., 2] / anchor[0] + 1e-16)
+    h_ = torch.log(box[..., 3] / anchor[1] + 1e-16)
+    return x, y, x_, y_, w_, h_
 
 
 def row_sort(X: torch.Tensor, descending=True) -> torch.Tensor:
@@ -37,8 +60,8 @@ def bbox_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
         box2 (torch.Tensor) : coor tensor of the first box to calculate IoU
     """
     # get the coordinates of bounding boxes
-    b1_x1, b1_y1, b1_x2, b1_y2 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
-    b2_x1, b2_y1, b2_x2, b2_y2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+    b1_x1, b1_y1, b1_x2, b1_y2 = box1[..., 0], box1[..., 1], box1[..., 2], box1[..., 3]
+    b2_x1, b2_y1, b2_x2, b2_y2 = box2[..., 0], box2[..., 1], box2[..., 2], box2[..., 3]
 
     # get the corrdinates of the intersection rectangle
     inter_rect_x1 = torch.max(b1_x1, b2_x1)
@@ -61,7 +84,7 @@ def bbox_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
 
 # this function is fixed and won't cut the autograd backward graph
 def predict_transform(prediction, inp_dim, anchors, num_class,
-                      confidence, CUDA, TARGET=False) -> torch.Tensor:
+                      confidence, CUDA, TRAIN=False) -> torch.Tensor:
     """
     Returns the prediction tensor with respect to the output of the YOLO
     Detection Layer
@@ -85,47 +108,47 @@ def predict_transform(prediction, inp_dim, anchors, num_class,
     prediction = prediction.view(
         batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
 
-    if not TARGET:
+    # sigmoid the  centre_X, centre_Y. and object confidencce
+    prediction[:, :, 0] = torch.sigmoid(prediction[:, :, 0])
+    prediction[:, :, 1] = torch.sigmoid(prediction[:, :, 1])
+    prediction[:, :, 4:] = torch.sigmoid(prediction[:, :, 4:])
+
+    # for trianing no offset addition
+    if not TRAIN:
         # decreasing the size of the anchor boxes to match with prediction
         anchors = [(a[0]/stride, a[1]/stride) for a in anchors]
 
-        # sigmoid the  centre_X, centre_Y. and object confidencce
-        prediction[:, :, 0] = torch.sigmoid(prediction[:, :, 0])
-        prediction[:, :, 1] = torch.sigmoid(prediction[:, :, 1])
-        prediction[:, :, 4] = torch.sigmoid(prediction[:, :, 4])
-
-    # add the center offsets
-    grid = np.arange(grid_size)
-    a, b = np.meshgrid(grid, grid)
-
-    x_offset = torch.FloatTensor(a).view(-1, 1)
-    y_offset = torch.FloatTensor(b).view(-1, 1)
-
-    if CUDA:
-        x_offset = x_offset.cuda()
-        y_offset = y_offset.cuda()
-
-    x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(
-        1, num_anchors).view(-1, 2).unsqueeze(0)
-
-    prediction[:, :, :2] += x_y_offset
-
-    if not TARGET:
         # log space transform height and the width
         anchors = torch.FloatTensor(anchors)
 
+        # add the center offsets
+        grid = np.arange(grid_size)
+        a, b = np.meshgrid(grid, grid)
+
+        x_offset = torch.FloatTensor(a).view(-1, 1)
+        y_offset = torch.FloatTensor(b).view(-1, 1)
+
         if CUDA:
             anchors = anchors.cuda()
+            x_offset = x_offset.cuda()
+            y_offset = y_offset.cuda()
+
+        x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(
+            1, num_anchors).view(-1, 2).unsqueeze(0)
+
+        prediction[:, :, :2] += x_y_offset
 
         anchors = anchors.repeat(grid_size*grid_size, 1).unsqueeze(0)
         prediction[:, :, 2:4] = torch.exp(prediction[:, :, 2:4])*anchors
 
-        prediction[:, :, 5: 5 +
-                   num_class] = torch.sigmoid((prediction[:, :, 5: 5 +
-                                                          num_class]))
-        prediction = confidence_mask(prediction, confidence)
+    # prediction[:, :, 5: 5 +
+               # num_class] = torch.sigmoid((prediction[:, :, 5: 5 +
+                                                      # num_class]))
 
-    prediction[:, :, :4] *= stride
+    # for training no confidence and stride multiplication
+    if not TRAIN:
+        prediction = confidence_mask(prediction, confidence)
+        prediction[:, :, :4] *= stride
 
     return prediction  # -> shape = [batch, #_of_boxes, 5 + #_of_classes]
 
