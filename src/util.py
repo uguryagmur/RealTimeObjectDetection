@@ -1,51 +1,49 @@
+"""DOCSTRING will be added later"""
 from __future__ import division
 
-import torch
 import numpy as np
+import torch
 import cv2
 
 
 def xyxy2xywh(box: torch.Tensor) -> torch.Tensor:
+    """DOCSTRING will be added later"""
     output = torch.zeros(box.size())
     output[..., 0] = (box[..., 2] + box[..., 0])/2
     output[..., 1] = (box[..., 3] + box[..., 1])/2
     output[..., 2] = box[..., 2] - box[..., 0]
     output[..., 3] = box[..., 3] - box[..., 1]
-    box[..., :4] = output[..., :4]
-    return box
+    output[..., 4:] = box[..., 4:]
+    return output
 
 
 def xywh2xyxy(box: torch.Tensor) -> torch.Tensor:
+    """DOCSTRING will be added later"""
     output = torch.zeros(box.size())
     output[..., 0] = (box[..., 0] - box[..., 2]/2)
     output[..., 1] = (box[..., 1] - box[..., 3]/2)
     output[..., 2] = (box[..., 0] + box[..., 2]/2)
     output[..., 3] = (box[..., 1] + box[..., 3]/2)
-    box[..., :4] = output[..., :4]
-    return box
+    output[..., 4:] = box[..., 4:]
+    return output
 
 
-def xywh2YOLOlayer(box: torch.Tensor, stride: float,
-                   anchor: tuple) -> torch.Tensor:
-    x_ = box[..., 0].item()/stride
-    x = int(box[..., 0].item()/stride)
-    y_ = box[..., 1].item()/stride
-    y = int(box[..., 1].item()/stride)
-    x_ -= x
-    y_ -= y
-    w_ = torch.log(box[..., 2] / anchor[0] + 1e-16)
-    h_ = torch.log(box[..., 3] / anchor[1] + 1e-16)
-    return x, y, x_, y_, w_, h_
-
-
-def row_sort(X: torch.Tensor, descending=True) -> torch.Tensor:
-    # elegant code @.@
-    X = X[torch.arange(X.shape[0]).reshape(X.shape[0], 1).repeat(
-          1, X.shape[1]), X[:, :, 0].argsort(dim=1, descending=descending)]
-    return X
+def xywh2YOLO(box: torch.Tensor, stride: float,
+              anchor: tuple):
+    """DOCSTRING will be added later"""
+    x = box[..., 0].item()/stride
+    x_coor = int(box[..., 0].item()/stride)
+    y = box[..., 1].item()/stride
+    y_coor = int(box[..., 1].item()/stride)
+    x -= x_coor
+    y -= y_coor
+    w = torch.log(box[..., 2] / anchor[0] + 1e-16).item()
+    h = torch.log(box[..., 3] / anchor[1] + 1e-16).item()
+    return y_coor, x_coor, y, x, w, h
 
 
 def confidence_mask(tensor: torch.Tensor, confidence: float) -> torch.Tensor:
+    """DOCSTRING will be added later"""
     # confidence masking for direct output of the YOLO layer
     conf_mask = (tensor[:, :, 4] > confidence).float().unsqueeze(2)
     return tensor*conf_mask
@@ -60,8 +58,10 @@ def bbox_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
         box2 (torch.Tensor) : coor tensor of the first box to calculate IoU
     """
     # get the coordinates of bounding boxes
-    b1_x1, b1_y1, b1_x2, b1_y2 = box1[..., 0], box1[..., 1], box1[..., 2], box1[..., 3]
-    b2_x1, b2_y1, b2_x2, b2_y2 = box2[..., 0], box2[..., 1], box2[..., 2], box2[..., 3]
+    b1_x1, b1_y1 = box1[..., 0], box1[..., 1]
+    b1_x2, b1_y2 = box1[..., 2], box1[..., 3]
+    b2_x1, b2_y1 = box2[..., 0], box2[..., 1]
+    b2_x2, b2_y2 = box2[..., 2], box2[..., 3]
 
     # get the corrdinates of the intersection rectangle
     inter_rect_x1 = torch.max(b1_x1, b2_x1)
@@ -82,9 +82,18 @@ def bbox_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
     return iou
 
 
+def bbox_iou_wh(wh1: tuple, wh2: tuple) -> float:
+    """DOCSTRING will be added later"""
+    w1, h1 = wh1[0], wh1[1]
+    w2, h2 = wh2[0], wh2[0]
+    intersect_area = min(w1, w2) * min(h1, h2)
+    union_area = w1*h1 + w2*h2 - intersect_area
+    return intersect_area/union_area
+
+
 # this function is fixed and won't cut the autograd backward graph
 def predict_transform(prediction, inp_dim, anchors, num_class,
-                      confidence, CUDA, TRAIN=False) -> torch.Tensor:
+                      CUDA, TRAIN=False) -> torch.Tensor:
     """
     Returns the prediction tensor with respect to the output of the YOLO
     Detection Layer
@@ -108,7 +117,7 @@ def predict_transform(prediction, inp_dim, anchors, num_class,
     prediction = prediction.view(
         batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
 
-    # sigmoid the  centre_X, centre_Y. and object confidencce
+    # sigmoid the  centre_x, centre_Y. and object confidencce
     prediction[:, :, 0] = torch.sigmoid(prediction[:, :, 0])
     prediction[:, :, 1] = torch.sigmoid(prediction[:, :, 1])
     prediction[:, :, 4:] = torch.sigmoid(prediction[:, :, 4:])
@@ -140,20 +149,13 @@ def predict_transform(prediction, inp_dim, anchors, num_class,
 
         anchors = anchors.repeat(grid_size*grid_size, 1).unsqueeze(0)
         prediction[:, :, 2:4] = torch.exp(prediction[:, :, 2:4])*anchors
-
-    # prediction[:, :, 5: 5 +
-               # num_class] = torch.sigmoid((prediction[:, :, 5: 5 +
-                                                      # num_class]))
-
-    # for training no confidence and stride multiplication
-    if not TRAIN:
-        prediction = confidence_mask(prediction, confidence)
         prediction[:, :, :4] *= stride
 
     return prediction  # -> shape = [batch, #_of_boxes, 5 + #_of_classes]
 
 
-def write_results(prediction, num_class, nms_conf=0.4) -> torch.Tensor:
+def write_results(prediction, num_class, confidence=0.6,
+                  nms_conf=0.4) -> torch.Tensor:
     """
     Returns the results of the predictions of the Darknet
     as bounding boxes and class of the object
@@ -165,6 +167,10 @@ def write_results(prediction, num_class, nms_conf=0.4) -> torch.Tensor:
         num_class (int) : number of classes can be detected by Darknet
         nms_conf (float) : non-max supression confidence (default=0.4)
     """
+
+    # confidence masking
+    prediction = confidence_mask(prediction, confidence)
+
     # transforming box attributes to corner coordinates
     box_corner = prediction.new(prediction.shape)
     box_corner[:, :, 0] = (prediction[:, :, 0] - prediction[:, :, 2]/2)
@@ -275,7 +281,7 @@ def letterbox_image(img, inp_dim) -> np.ndarray:
     return canvas
 
 
-def prep_image(img, inp_dim) -> torch.Tensor:
+def prep_image(img, inp_dim, mode='BGR') -> torch.Tensor:
     """
     Prepare image for inputting to the neural network as torch.Tensor
 
@@ -284,10 +290,14 @@ def prep_image(img, inp_dim) -> torch.Tensor:
         inp_dim (list) : input image dimensions
     """
 
+    assert mode == 'BGR' or mode == 'RGB'
     # scaling image by protecting the aspect-ratio
     img = (letterbox_image(img, (inp_dim, inp_dim)))
     # transpose for the pytorch tensor
-    img = img[:, :, ::-1].transpose((2, 0, 1)).copy()
+    if mode == 'RGB':
+        img = img.transpose((2, 0, 1)).copy()
+    else:
+        img = img[:, :, ::-1].transpose((2, 0, 1)).copy()
     # normalization of the image
     img = torch.from_numpy(img).float().div(255.0).unsqueeze(0)
     return img

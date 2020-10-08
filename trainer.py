@@ -8,10 +8,10 @@ import torch
 import argparse
 import torch.nn as nn
 import torch.optim as optim
-from src.dataset import COCO
+from src.dataset import COCO, VOC
 import matplotlib.pyplot as plt
 from src.darknet import Darknet
-from src.util import xywh2YOLOlayer, xywh2xyxy, bbox_iou
+from src.util import xywh2YOLO, bbox_iou_wh
 
 
 class DarknetTrainer:
@@ -46,14 +46,14 @@ class DarknetTrainer:
         self.batch_size = batch_size
         self.resolution = resolution
         self.confidence = confidence
-        self.criterion = nn.MSELoss(reduction='sum')
-        self.conf_criterion = nn.BCELoss(reduction='sum')
+        self.criterion = self.YOLO_loss
+        self.MSELoss = nn.MSELoss(reduction='sum')
+        self.BCELoss = nn.BCELoss(reduction='sum')
         self.darknet = Darknet(cfg_file,
-                               self.confidence,
                                self.CUDA,
                                TRAIN=True)
         self.darknet.net_info["height"] = resolution
-        self.optimizer = optim.Adam(self.darknet.parameters(), lr=0.01)
+        self.optimizer = optim.Adam(self.darknet.parameters(), lr=1e-2)
         self.history = dict()
         if cfg_file[-8:-4] == 'tiny':
             self.TINY = True
@@ -96,12 +96,31 @@ class DarknetTrainer:
                                                       shuffle=shuffle)
         print('DataLoader is created successfully!\n')
 
-    # to be continue
-    # prediction will be deleted
+    def VOC_loader(self, xml_dir, img_dir,
+                   batch_size, shuffle) -> None:
+        """Setting the dataloaders for the training
+
+        Parameters:
+            directory (str): Directory of the folder containing the images
+            batch_size (int): Size of the mini batches
+            shuffle (bool): When True, dataset images will be shuffled
+        """
+
+        assert isinstance(xml_dir, str)
+        assert isinstance(img_dir, str)
+        assert isinstance(batch_size, int)
+        assert isinstance(shuffle, bool)
+        self.dataset = VOC(xml_dir, img_dir, resolution=self.resolution)
+        self.data_num = self.dataset.__len__()
+        self.dataloader = self.dataset.get_dataloader(batch_size=batch_size,
+                                                      shuffle=shuffle)
+        print('DataLoader is created successfully!\n')
+
     def target_creator(self, bndbox):
         output = []
         mask = []
         anchors = self.darknet.anchors
+
         for i in range(len(bndbox)):
             layer_1, mask_1 = self.target_layer(bndbox[i], 13, anchors[:3])
             layer_2, mask_2 = self.target_layer(bndbox[i], 26, anchors[3:6])
@@ -116,7 +135,6 @@ class DarknetTrainer:
         mask = torch.stack(mask, dim=0).bool()
         return output, mask
 
-    # prediction will be deleted
     def target_layer(self, bboxes: torch.Tensor, scale, anchors):
         '''Bounding boxes are in xywh format'''
         output = torch.zeros((scale*scale*len(anchors),
@@ -124,83 +142,81 @@ class DarknetTrainer:
         mask = torch.zeros(output.shape[:-1])
         # zeros = torch.zeros(5 + self.num_classes)
         stride = self.resolution//scale
+        # for 26 scale in the below for loop THERE IS A STUPID FUCKING MISTAKE
         for box in bboxes:
             if box[5] != 1:
                 continue
+            # print('ANALYSIS')
+            # print(box[:6])
             anchor_fit = self.anchor_fit(box[:4], anchors)
             best_anchor = anchors[anchor_fit]
             # print('ANALYSIS')
             # print(stride)
-            # print(box[:5])
-            x, y, x_, y_, w_, h_ = xywh2YOLOlayer(box, stride,
-                                                  best_anchor)
-            # print(x, y, x_, y_, w_, h_)
-            loc = (x*scale + y)*len(anchors) + anchor_fit
-            # if (output[loc] != zeros).float().sum() == 0:
+            # print(box[:5], scale)
+            w_coor, h_coor, w_center, h_center, w, h = xywh2YOLO(box, stride,
+                                                                 best_anchor)
+            # print(x, y, x_, y_, w_, h_, scale)
+            # print('BOX= ', best_anchor)
+            loc = (w_coor*scale + h_coor)*len(anchors) + anchor_fit
+            # print(loc)
+            # print('----------------------------')
             output[loc] = box
-            output[loc][:4] = torch.FloatTensor([x_, y_, w_, h_])
+            output[loc][:4] = torch.FloatTensor([w_center, h_center, w, h])
             mask[loc] = 1
         return output, mask
 
     def anchor_fit(self, box: torch.Tensor, anchors: list):
-        anch_box = []
         output = []
-        anch_box.append(torch.cat((box[:2], torch.FloatTensor(anchors[0])),
-                                  dim=0))
-        anch_box.append(torch.cat((box[:2], torch.FloatTensor(anchors[1])),
-                                  dim=0))
-        anch_box.append(torch.cat((box[:2], torch.FloatTensor(anchors[2])),
-                                  dim=0))
-        box = xywh2xyxy(box)
-        for i in range(len(anch_box)):
-            output.append(bbox_iou(box, xywh2xyxy(anch_box[i])).item())
+        w_box, h_box = box[2].item(), box[3].item()
+        for i in range(len(anchors)):
+            output.append(bbox_iou_wh((w_box, h_box), anchors[i]))
         output = output.index(max(output))
         return output
 
-    def result_loss(self, target, prediction, loss):
-        if len(target) > len(prediction):
-            control = target
-            check = prediction
-        else:
-            control = prediction
-            check = target
-        index = 0
-        for i in range(len(control)):
-            if index >= len(check) or check[index, 0] > control[i, 0]:
-                loss += (control[i]**2).sum()
-            elif control[i, 0] > check[index, 0]:
-                loss += (check[index]**2).sum()
-                index += 1
-            else:
-                if control[i, -1] == check[index, -1]:
-                    loss += ((control[i] - check[index])**2).sum()
-                    index += 1
-                elif check[index, -1] > control[i, -1]:
-                    loss += (check[index]**2).sum()
-                    index += 1
-                else:
-                    loss += (control[i]**2).sum()
+    def YOLO_loss(self, pred, target, obj_mask):
+        no_obj_mask = (torch.ones(obj_mask.size()) - obj_mask.float()).bool()
+        loss = 10*self.MSELoss(pred[obj_mask][..., :2],
+                               target[obj_mask][..., :2])
+        loss += 10*self.MSELoss(pred[obj_mask][..., 2:4],
+                                target[obj_mask][..., 2:4])
+        loss += self.MSELoss(pred[obj_mask][..., 4],
+                             target[obj_mask][..., 4])
+        loss += 0.1*self.MSELoss(pred[no_obj_mask][..., 4],
+                                 target[no_obj_mask][..., 4])
+        loss += self.MSELoss(pred[obj_mask][..., 5],
+                             target[obj_mask][..., 5])
         return loss
 
     @staticmethod
-    def progress_bar(curr_epoch, curr_batch, batch_num, loss,
-                     t1=None, t2=None):
-        percent = curr_batch/batch_num
-        last = int((percent*1000) % 10)
-        percent = round(percent*100)
+    def progress_bar(curr_epoch, epoch_num, curr_batch, batch_num, loss):
+        bar_length = 100
+        percent = curr_batch/batch_num*100
         bar = 'Epoch: {:3d} '.format(curr_epoch)
         bar += 'Batch: {:3d} '.format(curr_batch)
-        bar += 'Loss: {:11.2f} '.format(loss)
-        # bar += 'ETA: {:.2f} '.format(t2-t1)
-        bar += '|' + '#' * int(percent)
-        if curr_batch != batch_num:
-            bar += '{}'.format(last)
-            bar += ' ' * (100-int(percent)) + '|'
-            print('\r'+bar, end='')
-        else:
-            bar += '#'
-            bar += ' ' * (100-int(percent)) + '|'
+        bar += 'Loss: {:<8.2f}\t'.format(loss)
+        bar += '{:>3.2f}% '.format(percent)
+        percent = round(percent)
+        bar += '|' + '=' * int(percent*bar_length/100)
+        if curr_batch == batch_num:
+            bar += ' ' * (bar_length - int(percent*bar_length/100)) + '|'
             print('\r'+bar)
+        else:
+            bar += '>'
+            bar += ' ' * (bar_length - int(percent*bar_length/100)) + '|'
+            print('\r'+bar, end='')
+
+    @staticmethod
+    def epoch_ETA(time1, time2, remaining_epoch) -> None:
+        delta = (time2 - time1)*remaining_epoch
+        ETA_h = int(delta/3600)
+        ETA_m = int((delta % 3600)/60)
+        ETA_s = int((delta % 3600) % 60)
+        print('\tETA: {0}:{1}:{2}\n'.format(ETA_h, ETA_m, ETA_s))
+
+    @staticmethod
+    def epoch_loss(loss, batch_data_length) -> None:
+        avg_loss = loss/batch_data_length
+        print('\n\tAverage Epoch Loss: {}'.format(avg_loss))
 
     def train(self, annotation_dir, img_dir):
         """Training the, batch_size = 8 network for the given dataset and network
@@ -218,12 +234,12 @@ class DarknetTrainer:
         # stop_training = False
         self.history['train_loss'] = [0]*self.epoch
         best_loss = None
-
-        # dataloader adjustment
         '''
-        self.VOC_loader(xml_directory, img_directory,
+        # dataloader adjustment
+        self.VOC_loader(annotation_dir, img_dir,
                         batch_size=self.batch_size,
-                        shuffle=True)'''
+                        shuffle=True)
+        '''
         self.COCO_loader(annotation_dir, img_dir,
                          batch_size=self.batch_size,
                          shuffle=True)
@@ -231,11 +247,14 @@ class DarknetTrainer:
         batch_num = self.data_num//self.batch_size + 1
         for epoch in range(1, self.epoch+1):
             running_loss = 0.0
+            start = time.time()
 
             # training mini-batches
             for batch, batch_samples in enumerate(self.dataloader):
                 samples = batch_samples[0]
                 bndbox = batch_samples[1]
+
+                # image sample show
                 # img = samples[0]
                 # bbox = bndbox[0]
                 # img = img.transpose(0, 1).transpose(1, 2).numpy()*255
@@ -254,6 +273,11 @@ class DarknetTrainer:
                 # img.show()
                 # exit()
 
+                # for b in bndbox[0]:
+                #     if b[5] != 1:
+                #         continue
+                #     print(b[:4])
+
                 if self.CUDA:
                     batch_data = samples.clone().cuda()
                 else:
@@ -265,6 +289,7 @@ class DarknetTrainer:
                 pred = self.darknet(batch_data)
                 # t1 = time.time()
                 # prediction = self.activation_pass(prediction)
+                # --> THERE IS NO PROBLEM UNTIL THERE
                 target, mask = self.target_creator(bndbox)
                 if self.CUDA:
                     target = target.cuda()
@@ -274,37 +299,33 @@ class DarknetTrainer:
                 # print(pred[..., :5][torch.nonzero(target[..., :5], as_tuple=True)])
                 # shit = target-pred
                 # print(shit[..., :5][torch.nonzero(target[..., :5], as_tuple=True)])
+
+                # torch.save(pred, 'prediction')
+                # torch.save(target, 'target')
+                # torch.save(mask, 'mask')
+                # p = write_results(pred, 80)
+                # print(p)
                 # exit()
-
-                pred[2:4] = (pred[2:4])/2
-                target[2:4] = (target[2:4])/2
-                box_loss = 5*self.criterion(pred[mask][:4], target[mask][:4])
-                cls_loss = self.criterion(pred[mask][5:], target[mask][5:])
-                pred = pred[..., 4]
-                target = target[..., 4]
-                noobj_mask = (torch.ones(mask.shape) - mask.float()).bool()
-                conf_loss = self.conf_criterion(pred[mask], target[mask])
-                conf_loss += 0.5*self.conf_criterion(pred[noobj_mask],
-                                                     target[noobj_mask])
-
-                loss = box_loss + conf_loss + cls_loss
+                loss = self.criterion(pred, target, mask)
                 loss.backward()
                 self.optimizer.step()
 
                 # loss at the end of the batch
                 running_loss += loss.item()
-                self.progress_bar(epoch, batch+1, batch_num, loss.item())
+                self.progress_bar(epoch, self.epoch, batch+1,
+                                  batch_num, loss.item())
 
                 torch.cuda.empty_cache()
-                if best_loss is None or running_loss < best_loss:
-                    best_loss = running_loss
-                    torch.save(self.darknet.state_dict(),
-                               'weights/checkpoint')
-                    torch.save(self.optimizer.state_dict(),
-                               'weights/checkpoint_opt')
-                del batch_data, bndbox, pred, target, loss
+            if best_loss is None or running_loss < best_loss:
+                best_loss = running_loss
+                torch.save(self.darknet.state_dict(),
+                           'weights/checkpoint')
+                torch.save(self.optimizer.state_dict(),
+                           'weights/checkpoint_opt')
 
-            print('\n\tTotal Epoch Loss = {}\n'.format(running_loss))
+            end = time.time()
+            self.epoch_loss(running_loss, self.dataset.__len__())
+            self.epoch_ETA(start, end, self.epoch-epoch)
             self.history['train_loss'][epoch-1] = running_loss/(batch_num)
 
         # when the training is finished
@@ -382,7 +403,7 @@ if __name__ == '__main__':
     CUDA = args.CUDA
     TUNE = args.TUNE
     assert type(CUDA) == bool
-    trainer = DarknetTrainer(cfg, None,
+    trainer = DarknetTrainer(cfg, weights,
                              epoch=epoch_number,
                              batch_size=batch_size,
                              resolution=reso, confidence=confidence,

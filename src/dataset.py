@@ -1,7 +1,5 @@
 '''VOC and COC Dataloader for Object Detection'''
 
-import matplotlib
-import matplotlib.pyplot as plt
 from PIL import ImageDraw
 import glob
 import json
@@ -11,9 +9,9 @@ from PIL import Image
 from xml.etree import ElementTree as ET
 from torch.utils.data import Dataset, DataLoader
 try:
-    from .util import prep_image
+    from .util import prep_image, xyxy2xywh
 except ImportError:
-    from util import prep_image
+    from util import prep_image, xyxy2xywh
 
 
 class VOC(Dataset):
@@ -102,18 +100,25 @@ found.""".format(xml_directory, fformat))
 
         assert isinstance(i, int)
         assert i < len(self.xml_path_list)
-        bndbox = self.read_xml(self.xml_path_list[i])
+        bbox = self.read_xml(self.xml_path_list[i])
         img_path = self.data[self.xml_path_list[i]]
         img = Image.open(img_path)
-        if bndbox is not None:
-            for b in bndbox:
+        max_im_size = max(img.size)
+        w, h = img.size
+        ratio = float(self.resolution/max_im_size)
+        pad = [int((max_im_size - w)*ratio/2), int((max_im_size - h)*ratio/2)]
+        if bbox is not None:
+            for b in bbox:
                 b.extend([1, 1])
                 b.extend([0]*79)
-            bndbox = torch.tensor(bndbox)
-            bndbox = (bndbox * float(self.resolution/max(img.size))).long()
+            bbox = torch.tensor(bbox)
+            bbox = xyxy2xywh(bbox)
+            bbox[..., :4] *= ratio
+            bbox[:, 0] += pad[0]
+            bbox[:, 1] += pad[1]
         img = np.asarray(img)
-        img = prep_image(img, self.resolution)
-        return img[0], bndbox
+        img = prep_image(img, self.resolution, mode='RGB').squeeze(0)
+        return img, bbox
 
     @staticmethod
     def collate_fn(batch):
@@ -196,7 +201,7 @@ class COCO(Dataset):
         pad = [int((max_im_size - w)*ratio/2), int((max_im_size - h)*ratio/2)]
 
         img = np.asarray(img)
-        img = prep_image(img, self.resolution).squeeze(0)
+        img = prep_image(img, self.resolution, mode='RGB').squeeze(0)
         bbox = []
         for obj in self.objs:
             if obj['image_id'] == id_:
@@ -246,13 +251,13 @@ COCO/2017/annotations/instances_val2017.json'
     dset = COCO(json_path, img_path)
     # print(dset.__len__())
     # print(Dset.__len__())
-    img, bbox = dset.__getitem__(19)
+    img, bbox = dset.__getitem__(6)
     img = img.transpose(0, 1).transpose(1, 2).numpy()
     img = Image.fromarray(np.uint8(img*255))
     draw = ImageDraw.Draw(img)
     for b in bbox:
         if b[5] != 1:
-            continue
+            pass
         box = b[:4].numpy()
         bbox = [0, 0, 0, 0]
         bbox[0] = int(box[0] - box[2]/2)

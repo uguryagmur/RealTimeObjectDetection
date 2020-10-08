@@ -68,7 +68,7 @@ class DetectionLayer(nn.Module):
             given in the classes with given confidence
     """
 
-    def __init__(self, anchors):
+    def __init__(self, anchors, CUDA=False):
         r"""Constructor of the Detection Layer Class
 
         --------
@@ -77,8 +77,9 @@ class DetectionLayer(nn.Module):
         """
         super(DetectionLayer, self).__init__()
         self.anchors = anchors
+        self.CUDA = CUDA
 
-    def forward(self, x, inp_dim, num_classes, confidence) -> torch.Tensor:
+    def forward(self, x, inp_dim, num_classes) -> torch.Tensor:
         r"""Forward pass definition of the Detection Layer
 
         --------
@@ -86,12 +87,11 @@ class DetectionLayer(nn.Module):
             x (torch.Tensor) : input tensor of the layer
             inp_dim (list) : dimensions of the input file
             num_classes (int) : number of the classes for object detection
-            confidence (float) : confidence score for the object detection
         """
         x = x.data
         prediction = x
         prediction = predict_transform(prediction, inp_dim, self.anchors,
-                                       num_classes, confidence)
+                                       num_classes, CUDA=self.CUDA)
         return prediction
 
 
@@ -168,7 +168,7 @@ class Darknet(nn.Module):
                 torch.nn.ModuleList object to build network
     """
 
-    def __init__(self, cfg_file_path, confidence, CUDA, TRAIN=False):
+    def __init__(self, cfg_file_path, CUDA, TRAIN=False):
         """Constructor of the Darknet Class
 
         --------
@@ -180,7 +180,6 @@ class Darknet(nn.Module):
         self.net_info, self.module_list = self.create_modules(self.blocks)
         self.header = torch.IntTensor([0, 0, 0, 0])
         self.seen = 0
-        self.confidence = confidence
         self.CUDA = CUDA
         self.TRAIN = TRAIN
 
@@ -262,7 +261,6 @@ class Darknet(nn.Module):
                 x = predict_transform(x, inp_dim,
                                       anchors,
                                       self.num_classes,
-                                      self.confidence,
                                       self.CUDA,
                                       TRAIN=self.TRAIN)
 
