@@ -215,6 +215,9 @@ class Darknet(nn.Module):
 
                 x = self.module_list[i](x)
                 outputs[i] = x
+                if module_type == 'convolutional' and\
+                   self.module_list[i][0].out_channels > 256:
+                    x = nn.Dropout(0.4)(x)
 
             # route layer
             elif module_type == "route":
@@ -519,7 +522,7 @@ class Darknet(nn.Module):
                 if end < 0:
                     filters = output_filters[index +
                                              start] +\
-                                 output_filters[index + end]
+                        output_filters[index + end]
                 else:
                     filters = output_filters[index + start]
 

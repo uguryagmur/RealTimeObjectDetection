@@ -53,7 +53,7 @@ class DarknetTrainer:
                                self.CUDA,
                                TRAIN=True)
         self.darknet.net_info["height"] = resolution
-        self.optimizer = optim.Adam(self.darknet.parameters(), lr=1e-2)
+        self.optimizer = optim.Adam(self.darknet.parameters(), lr=1e-3)
         self.history = dict()
         if cfg_file[-8:-4] == 'tiny':
             self.TINY = True
@@ -69,9 +69,9 @@ class DarknetTrainer:
         if torch.cuda.device_count() > 1:
             self.darknet = nn.DataParallel(self.darknet)
         if TUNE:
-            self.darknet.load_state_dict(torch.load('weights/checkpoint'))
+            self.darknet.load_state_dict(torch.load('weights/training_output'))
             self.optimizer.load_state_dict(
-                torch.load('weights/checkpoint_opt'))
+                torch.load('weights/training_output_opt'))
         self.darknet = self.darknet.train()
         print("\nTrainer is ready!!\n")
         print('GPU usage = {}\n'.format(self.CUDA))
@@ -146,6 +146,8 @@ class DarknetTrainer:
         for box in bboxes:
             if box[5] != 1:
                 continue
+            elif box[2] < 24 or box[3] < 24:
+                continue
             # print('ANALYSIS')
             # print(box[:6])
             anchor_fit = self.anchor_fit(box[:4], anchors)
@@ -175,16 +177,16 @@ class DarknetTrainer:
 
     def YOLO_loss(self, pred, target, obj_mask):
         no_obj_mask = (torch.ones(obj_mask.size()) - obj_mask.float()).bool()
-        loss = 10*self.MSELoss(pred[obj_mask][..., :2],
+        loss = 50*self.MSELoss(pred[obj_mask][..., :2],
                                target[obj_mask][..., :2])
-        loss += 10*self.MSELoss(pred[obj_mask][..., 2:4],
+        loss += 50*self.MSELoss(pred[obj_mask][..., 2:4],
                                 target[obj_mask][..., 2:4])
-        loss += self.MSELoss(pred[obj_mask][..., 4],
-                             target[obj_mask][..., 4])
+        loss += 10*self.MSELoss(pred[obj_mask][..., 4],
+                                target[obj_mask][..., 4])
         loss += 0.1*self.MSELoss(pred[no_obj_mask][..., 4],
                                  target[no_obj_mask][..., 4])
-        loss += self.MSELoss(pred[obj_mask][..., 5],
-                             target[obj_mask][..., 5])
+        loss += self.MSELoss(pred[obj_mask][..., 5:],
+                             target[obj_mask][..., 5:])
         return loss
 
     @staticmethod
@@ -234,8 +236,9 @@ class DarknetTrainer:
         # stop_training = False
         self.history['train_loss'] = [0]*self.epoch
         best_loss = None
-        '''
+
         # dataloader adjustment
+        '''
         self.VOC_loader(annotation_dir, img_dir,
                         batch_size=self.batch_size,
                         shuffle=True)
@@ -351,9 +354,8 @@ VOCdevkit/VOC2012/Annotations'
     img_def_VOC = '/home/adm1n/Datasets/SPAutoencoder/VOC2012'
     cfg_def = 'cfg/yolov3-tiny.cfg'
     weights_def = 'weights/yolov3-tiny.weights'
-    ann_def_COCO = '/home/adm1n/Datasets/\
-COCO/2017/annotations/instances_val2017.json'
-    img_def_COCO = '/home/adm1n/Datasets/COCO/2017/val2017/'
+    ann_def_COCO = '/home/ubuntu/extra/data/'
+    img_def_COCO = '/home/ubuntu/extra/data/'
 
     # argument parsing
     parser = argparse.ArgumentParser(description='YOLO v3 Training Module')
@@ -367,10 +369,10 @@ COCO/2017/annotations/instances_val2017.json'
                         default=img_def_COCO, type=str)
     parser.add_argument("--batch_size", dest="bs",
                         help="Batch size of training",
-                        default=64, type=int)
+                        default=16, type=int)
     parser.add_argument("--epoch", dest="epoch",
                         help="Epoch Number of training",
-                        default=40, type=int)
+                        default=30, type=int)
     parser.add_argument("--confidence", dest="conf",
                         help="Object Confidence to filter predictions",
                         default=0.6, type=float)

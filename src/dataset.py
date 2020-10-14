@@ -1,11 +1,13 @@
 '''VOC and COC Dataloader for Object Detection'''
 
-from PIL import ImageDraw
+import os
 import glob
 import json
 import torch
+import pickle
 import numpy as np
 from PIL import Image
+from PIL import ImageDraw
 from xml.etree import ElementTree as ET
 from torch.utils.data import Dataset, DataLoader
 try:
@@ -156,6 +158,8 @@ class COCO(Dataset):
         super(COCO, self).__init__()
         self.resolution = resolution
         self.img_dir = img_dir
+        if self.img_dir[-1] != '/':
+            self.img_dir += '/'
         self.read_annotations(anotations_json)
         self.deleted_cls = [12, 26, 29, 30, 45, 66, 68, 69, 71, 83, 91]
 
@@ -187,8 +191,6 @@ class COCO(Dataset):
 
     def __getitem__(self, index):
         id_ = self.img_ids[index]
-        if self.img_dir[-1] != '/':
-            self.img_dir += '/'
         img = self.img_dir + self.img_set[id_]['file_name']
         img = Image.open(img).convert('RGB')
 
