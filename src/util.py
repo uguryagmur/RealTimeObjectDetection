@@ -1,9 +1,10 @@
 """DOCSTRING will be added later"""
 from __future__ import division
 
-import numpy as np
-import torch
 import cv2
+import torch
+import numpy as np
+from PIL import Image, ImageDraw
 
 
 def xyxy2xywh(box: torch.Tensor) -> torch.Tensor:
@@ -40,6 +41,26 @@ def xywh2YOLO(box: torch.Tensor, stride: float,
     w = torch.log(box[..., 2] / anchor[0] + 1e-16).item()
     h = torch.log(box[..., 3] / anchor[1] + 1e-16).item()
     return y_coor, x_coor, y, x, w, h
+
+
+def draw_boxes(img: torch.Tensor, bbox: torch.Tensor,
+               img_dir, from_tensor=False):
+    if from_tensor:
+        img = img.transpose(0, 1).transpose(1, 2).numpy()*255
+        img = Image.fromarray(np.uint8(img))
+    draw = ImageDraw.Draw(img)
+    for b in bbox:
+        if b[5] != 1:
+            continue
+        box = b[:4].numpy()
+        bbox = [0, 0, 0, 0]
+        bbox[0] = int(box[0] - box[2]/2)
+        bbox[1] = int(box[1] - box[3]/2)
+        bbox[2] = int(box[0] + box[2]/2)
+        bbox[3] = int(box[1] + box[3]/2)
+        draw.rectangle(bbox, outline='red')
+    img.show()
+    # img.save(img_dir)
 
 
 def confidence_mask(tensor: torch.Tensor, confidence: float) -> torch.Tensor:

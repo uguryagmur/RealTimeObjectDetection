@@ -1,19 +1,17 @@
 '''VOC and COC Dataloader for Object Detection'''
 
-import os
 import glob
 import json
 import torch
-import pickle
 import numpy as np
 from PIL import Image
 from PIL import ImageDraw
 from xml.etree import ElementTree as ET
 from torch.utils.data import Dataset, DataLoader
 try:
-    from .util import prep_image, xyxy2xywh
+    from .util import prep_image, xyxy2xywh, draw_boxes
 except ImportError:
-    from util import prep_image, xyxy2xywh
+    from util import prep_image, xyxy2xywh, draw_boxes
 
 
 class VOC(Dataset):
@@ -152,7 +150,8 @@ found.""".format(xml_directory, fformat))
 class COCO(Dataset):
     '''COCO Dataset DataLoader for Object Detection'''
 
-    def __init__(self, anotations_json, img_dir, resolution=416):
+    def __init__(self, anotations_json, img_dir,
+                 resolution=416, keep_img_name=False):
         '''Constructor of COCO Class'''
 
         super(COCO, self).__init__()
@@ -162,6 +161,11 @@ class COCO(Dataset):
             self.img_dir += '/'
         self.read_annotations(anotations_json)
         self.deleted_cls = [12, 26, 29, 30, 45, 66, 68, 69, 71, 83, 91]
+        self.keep_img_name = keep_img_name
+        # with open('COCO_val_objs.json', 'w') as file:
+        #     json.dump(self.objs, file)
+        # with open('COCO_val_img_ids.json', 'w') as file:
+        #     json.dump(self.img_ids, file)
 
     def read_annotations(self, anotations_json, non_crowd=True):
         ann = json.load(open(anotations_json))
@@ -193,6 +197,8 @@ class COCO(Dataset):
         id_ = self.img_ids[index]
         img = self.img_dir + self.img_set[id_]['file_name']
         img = Image.open(img).convert('RGB')
+        if self.keep_img_name:
+            img_name = self.img_set[id_]['file_name']
 
         # obtaining the image size
         max_im_size = max(img.size)
@@ -201,9 +207,9 @@ class COCO(Dataset):
 
         # calculating paddings for bboxes
         pad = [int((max_im_size - w)*ratio/2), int((max_im_size - h)*ratio/2)]
-
         img = np.asarray(img)
         img = prep_image(img, self.resolution, mode='RGB').squeeze(0)
+
         bbox = []
         for obj in self.objs:
             if obj['image_id'] == id_:
@@ -218,17 +224,30 @@ class COCO(Dataset):
                 box[0] += box[2]/2 + pad[0]
                 box[1] += box[3]/2 + pad[1]
                 bbox.append(box)
+        # draw_boxes(img, bbox, 'coco_val_with_box/'+img_name)
+        if not self.keep_img_name:
+            if bbox == []:
+                return []
+            else:
+                bbox = torch.stack(bbox, dim=0)
+                return img, bbox
 
-        if bbox == []:
-            return []
         else:
-            bbox = torch.stack(bbox, dim=0)
-            return img, bbox
+            if bbox == []:
+                return img_name, []
+            else:
+                bbox = torch.stack(bbox, dim=0)
+                return img_name, img, bbox
 
     def collate_fn(self, batch):
-        img, bbox = zip(*batch)
-        img = torch.stack(img, dim=0)
-        return img, bbox
+        if not self.keep_img_name:
+            img, bbox = zip(*batch)
+            img = torch.stack(img, dim=0)
+            return img, bbox
+        else:
+            img_name, img, bbox = zip(*batch)
+            img = torch.stack(img, dim=0)
+            return img_name, img, bbox
 
     def get_dataloader(self, batch_size, shuffle=True, num_workers=4):
         dloader = DataLoader(self, batch_size=batch_size,
