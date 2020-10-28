@@ -1,6 +1,7 @@
 from __future__ import division
 import os
 import cv2
+import json
 import time
 import torch
 import random
@@ -31,19 +32,21 @@ def arg_parse():
                         default=1, type=int)
     parser.add_argument("--confidence", dest="confidence",
                         help="Object Confidence to filter predictions",
-                        default=0.8, type=float)
+                        default=0.6, type=float)
     parser.add_argument("--nms_thresh", dest="nms_thresh",
                         help="NMS Threshhold", default=0.5)
     parser.add_argument("--cfg", dest='cfg_file', help="Config file",
-                        default="cfg/yolov3.cfg", type=str)
+                        default="cfg/yolov3-tiny.cfg", type=str)
     parser.add_argument("--weights", dest='weights_file', help="weightsfile",
-                        default="weights/yolov3.weights", type=str)
+                        default="weights/yolov3-tiny.weights", type=str)
     parser.add_argument("--reso", dest='reso',
                         help="""Input resolution of the network. Increase to
                         increase accuracy. Decrease to increase speed""",
                         default=416, type=int)
     parser.add_argument("--use_GPU", dest='CUDA', action='store_true',
                         help="GPU Acceleration Enable Flag (true/false)")
+    parser.add_argument("--trained", dest='TORCH', action='store_true',
+                        help="Whether torch trained weights file (true/false)")
 
     return parser.parse_args()
 
@@ -73,15 +76,16 @@ def box_write(tensor, results) -> np.ndarray:
 
 def read_directory(directory) -> list:
     try:
-        imlist = [osp.join(osp.realpath('.'), directory, img)
-                  for img in os.listdir(directory)]
+        img_path_list = [osp.join(osp.realpath('.'), directory, img)
+                         for img in os.listdir(directory)]
+        img_name_list = [img for img in os.listdir(directory)]
     except NotADirectoryError:
         imlist = []
         imlist.append(osp.join(osp.realpath('.'), directory))
     except FileNotFoundError:
         print("No file or directory with the name {}".format(directory))
         raise
-    return imlist
+    return img_path_list, img_name_list
 
 
 def batch_img_load(img_list, batch_size=1):
@@ -116,8 +120,9 @@ if __name__ == '__main__':
     nms_thesh = float(args.nms_thresh)
     start = 0
     CUDA = args.CUDA
+    TORCH = args.TORCH
     assert type(CUDA) == bool
-    metrics = []
+    metrics = {}
 
     # configuration of classes
     num_classes = 80
@@ -126,8 +131,10 @@ if __name__ == '__main__':
     # configuration of darknet
     print("Loading network.....")
     model = Darknet(args.cfg_file, CUDA)
-    model.load_weights(args.weights_file)
-    model.load_state_dict(torch.load('weights/checkpoint'))
+    if TORCH:
+        model.load_state_dict(torch.load(args.weights_file))
+    else:
+        model.load_weights(args.weights_file)
     print("Network successfully loaded")
 
     # if the destination path doesn't exist
@@ -148,9 +155,9 @@ if __name__ == '__main__':
     elif CUDA:
         model.cuda()
 
-    img_list = read_directory(images)
-    print('Number of Images= ', len(img_list))
-    batch_gen = batch_img_load(img_list, batch_size)
+    img_path_list, img_name_list = read_directory(images)
+    print('Number of Images= ', len(img_path_list))
+    batch_gen = batch_img_load(img_path_list, batch_size)
 
     for i, batch_data in enumerate(batch_gen):
         print('BATCH NUMBER: ', i)
@@ -161,10 +168,9 @@ if __name__ == '__main__':
         write = 0
         prediction = torch.zeros(1)
         if CUDA:
+            im_batches = im_batches.cuda()
             im_dim_list = im_dim_list.cuda()
         start = time.time()
-        if CUDA:
-            im_batches = im_batches.cuda()
         with torch.no_grad():
             prediction = model(Variable(im_batches))
 
@@ -186,10 +192,7 @@ if __name__ == '__main__':
                 print("{0:20s} {1:s}".format("Objects Detected:", ""))
                 print("----------------o----------------")
 
-            t = (end-start)/batch_size
-            text = ''.join([image.split("/")[-1] + "\n",
-                            "\tTime (s): {:.4f}\n".format(t)])
-            metrics.append(text)
+            metrics[img_name_list[i]] = prediction
             continue
 
         # transform the atribute from index in batch to index in imlist
@@ -220,10 +223,7 @@ if __name__ == '__main__':
                                  bbox_text,
                                  "\t\tObjectness: {:.4f}\n".format(x[-3]),
                                  "\t\tClass Conf.: {:.4f}\n".format(x[-2])])
-            t = (end-start)/batch_size
-            text = ''.join([image.split("/")[-1] + "\n",
-                            "\tTime (s): {:.4f}\n".format(t)]) + text
-            metrics.append(text)
+            metrics[img_name_list[i]] = prediction.tolist()
 
         if CUDA:
             torch.cuda.synchronize()
@@ -258,7 +258,7 @@ if __name__ == '__main__':
 
         list(map(lambda x: box_write(x, loaded_ims), output))
 
-        det_names = pd.Series(img_list[i]).apply(
+        det_names = pd.Series(img_path_list[i]).apply(
             lambda x: "{}/det_{}_{}".format(args.det,
                                             args.cfg_file[4:-4],
                                             x.split("/")[-1]))
@@ -269,9 +269,8 @@ if __name__ == '__main__':
 
     # writing the metrics to file
     metrics_file = args.det + '/metrics.yaml'
-    file = open(metrics_file, 'w')
-    file.write("".join(metrics))
-    file.close()
+    with open('metrics.json', 'w') as file:
+        json.dump(metrics, file)
 
     # empty cuda cash
     torch.cuda.empty_cache()

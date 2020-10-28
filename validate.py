@@ -36,7 +36,8 @@ class DarknetValidator:
                             self.resolution, keep_img_name=True)
         self.data_num = self.dataset.__len__()
         self.dataloader = self.dataset.get_dataloader(batch_size=1,
-                                                      shuffle=False)
+                                                      shuffle=False,
+                                                      num_workers=1)
 
     def target_filter(self, target: torch.Tensor, permitted_classes: tuple,
                       min_box_size=0):
@@ -47,6 +48,7 @@ class DarknetValidator:
                 output.append(target[i].clone())
         if len(output) > 0:
             output = torch.stack(output, dim=0)
+            output = xywh2xyxy(output)
             return output
         else:
             return None
@@ -76,7 +78,7 @@ class DarknetValidator:
         false_negative = 0
         for box in pred:
             for t_box in target:
-                iou = bbox_iou(box[1:5].cpu(), xywh2xyxy(t_box[0:4]).cpu())
+                iou = bbox_iou(box[1:5].cpu(), t_box[0:4].cpu())
                 print(iou)
                 if iou.item() > threshold:
                     row.append(iou.item())
@@ -187,6 +189,32 @@ class DarknetValidator:
         self.save_scores(img_score_dir='img_scores.json',
                          total_score_dir='total_scores.json')
 
+    def validate_json(self, json_dir, img_scores=False):
+        pred_dict = json.load(open(json_dir, 'r'))
+        with self.dataset.only_ground_truth():
+            for batch, data in enumerate(self.dataloader):
+                img_name = data[0][0]
+                print(img_name)
+                bndbox = data[1][0]
+                pred = torch.FloatTensor(pred_dict[img_name])
+                bndbox = self.target_filter(bndbox, [0], min_box_size=24)
+                print(bndbox)
+                pred = self.pred_filter(pred, [0])
+                print(pred)
+                self.get_img_scores(img_name, pred, bndbox, img_scores=True)
+
+        tp = self.total_scores['tp']
+        fp = self.total_scores['fp']
+        fn = self.total_scores['fn']
+        precision = tp/(tp + fp)
+        recall = tp/(tp + fn)
+        f_score = 2/((1/recall) + (1/precision))
+        print('Precision = ', precision)
+        print('Recall = ', recall)
+        print('F_Score = ', f_score)
+        self.save_scores(img_score_dir='img_scores.json',
+                         total_score_dir='total_scores.json')
+
 
 if __name__ == '__main__':
     cfg_file = 'cfg/yolov3-tiny.cfg'
@@ -198,4 +226,6 @@ if __name__ == '__main__':
     model.load_weights(weights_file)
     # model.load_state_dict(torch.load('weights/experiment3/checkpoint8'))
     validator = DarknetValidator(annot_dir, img_dir)
-    validator.validate_model(model, CUDA=True, img_scores=True)
+    # validator.validate_model(model, CUDA=True, img_scores=True)
+    json_dir = 'metrics.json'
+    validator.validate_json(json_dir, img_scores=True)
