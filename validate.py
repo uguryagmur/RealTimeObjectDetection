@@ -67,11 +67,6 @@ class DarknetValidator:
             return 0
 
     def compare_boxes(self, pred, target, threshold: float):
-        print('COMPARE BOXES')
-        print('---PRED---')
-        print(pred)
-        print('---TARGET---')
-        print(target[:, :4])
         box_ious = []
         row = []
         true_positive = 0
@@ -79,7 +74,6 @@ class DarknetValidator:
         for box in pred:
             for t_box in target:
                 iou = bbox_iou(box[1:5].cpu(), t_box[0:4].cpu())
-                print(iou)
                 if iou.item() > threshold:
                     row.append(iou.item())
                 else:
@@ -91,22 +85,16 @@ class DarknetValidator:
 
         # if there is an anormal change on pred tensor problem might be there
         for i in range(pred.size(0)):
-            print('LOOP ', i)
-            print(box_ious)
             if torch.max(box_ious).item() == 0:
                 break
             max_val, max_ind = torch.max(box_ious, dim=1)
             ind = torch.argmax(max_val).long()
-            print(max_val)
-            print(max_ind)
-            print(ind)
             box_ious[ind] = torch.zeros(box_ious[ind].size())
             box_ious[:, max_ind[ind]] = torch.zeros(
                 box_ious[:, max_ind[ind]].size())
             true_positive += 1
 
         false_negative = target.size(0) - true_positive
-        print(true_positive, false_negative)
         return true_positive, false_negative
 
     def save_img_scores_(self, img_name, people_num, tp, fp, fn):
@@ -122,9 +110,6 @@ class DarknetValidator:
         self.total_scores['fn'] += fn
 
     def get_img_scores(self, img_name, pred, target, img_scores=False):
-        print('IN FUNCTION')
-        print(pred)
-        print(target)
         true_positive = 0
         false_positive = 0
         false_negative = 0
@@ -141,12 +126,15 @@ class DarknetValidator:
                                                                target, 0.4)
         false_negative = people_num - true_positive
 
+        # print(img_name, people_num, true_positive,
+        #       false_positive, false_negative)
+
         if img_scores:
             self.save_img_scores_(img_name, people_num, true_positive,
                                   false_positive, false_negative)
 
-        self.save_total_scores_(people_num, true_positive,
-                                false_negative, false_positive)
+        # self.save_total_scores_(people_num, true_positive,
+        #                         false_negative, false_positive)
 
     def save_scores(self, img_score_dir=None, total_score_dir=None):
         if img_score_dir is not None:
@@ -157,12 +145,9 @@ class DarknetValidator:
     def validate_model(self, model: Darknet, CUDA=False, img_scores=False):
         for batch, data in enumerate(self.dataloader):
             img_name = data[0][0]
-            print(img_name)
             samples = data[1]
             bndbox = data[2][0]
-            print(bndbox)
             bndbox = self.target_filter(bndbox, [0], min_box_size=24)
-            print(bndbox)
             # draw_boxes(samples.squeeze(0), bndbox, None, from_tensor=True)
             if CUDA:
                 samples = samples.cuda()
@@ -175,17 +160,16 @@ class DarknetValidator:
             # applying filters for certain classes
             pred = self.pred_filter(pred, [0])
             self.get_img_scores(img_name, pred, bndbox, img_scores)
-            print('---------------')
 
         tp = self.total_scores['tp']
         fp = self.total_scores['fp']
         fn = self.total_scores['fn']
-        precision = tp/(tp + fp)
-        recall = tp/(tp + fn)
-        f_score = 2/((1/recall) + (1/precision))
-        print('Precision = ', precision)
-        print('Recall = ', recall)
-        print('F_Score = ', f_score)
+        self.precision = torch.tensor(tp/(tp + fp))
+        self.recall = torch.tensor(tp/(tp + fn))
+        self.f_score = (2/((1/self.recall) + (1/self.precision))).clone()
+        print('\tPrecision = ', self.precision)
+        print('\tRecall = ', self.recall)
+        print('\tF_Score = ', self.f_score)
         self.save_scores(img_score_dir='img_scores.json',
                          total_score_dir='total_scores.json')
 
@@ -194,24 +178,21 @@ class DarknetValidator:
         with self.dataset.only_ground_truth():
             for batch, data in enumerate(self.dataloader):
                 img_name = data[0][0]
-                print(img_name)
                 bndbox = data[1][0]
                 pred = torch.FloatTensor(pred_dict[img_name])
                 bndbox = self.target_filter(bndbox, [0], min_box_size=24)
-                print(bndbox)
                 pred = self.pred_filter(pred, [0])
-                print(pred)
                 self.get_img_scores(img_name, pred, bndbox, img_scores=True)
 
         tp = self.total_scores['tp']
         fp = self.total_scores['fp']
         fn = self.total_scores['fn']
-        precision = tp/(tp + fp)
-        recall = tp/(tp + fn)
-        f_score = 2/((1/recall) + (1/precision))
-        print('Precision = ', precision)
-        print('Recall = ', recall)
-        print('F_Score = ', f_score)
+        self.precision = torch.tensor(tp/(tp + fp))
+        self.recall = torch.tensor(tp/(tp + fn))
+        self.f_score = (2/((1/self.recall) + (1/self.precision))).clone()
+        print('\tPrecision = ', self.precision)
+        print('\tRecall = ', self.recall)
+        print('\tF_Score = ', self.f_score)
         self.save_scores(img_score_dir='img_scores.json',
                          total_score_dir='total_scores.json')
 
@@ -226,6 +207,6 @@ if __name__ == '__main__':
     model.load_weights(weights_file)
     # model.load_state_dict(torch.load('weights/experiment3/checkpoint8'))
     validator = DarknetValidator(annot_dir, img_dir)
-    # validator.validate_model(model, CUDA=True, img_scores=True)
+    validator.validate_model(model, CUDA=True, img_scores=True)
     json_dir = 'metrics.json'
-    validator.validate_json(json_dir, img_scores=True)
+    # validator.validate_json(json_dir, img_scores=True)

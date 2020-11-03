@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
+from contextlib import contextmanager
 try:
     from src.util import predict_transform
 except ImportError:
@@ -168,7 +169,7 @@ class Darknet(nn.Module):
                 torch.nn.ModuleList object to build network
     """
 
-    def __init__(self, cfg_file_path, CUDA, TRAIN=False):
+    def __init__(self, cfg_file_path, CUDA):
         """Constructor of the Darknet Class
 
         --------
@@ -181,7 +182,7 @@ class Darknet(nn.Module):
         self.header = torch.IntTensor([0, 0, 0, 0])
         self.seen = 0
         self.CUDA = CUDA
-        self.TRAIN = TRAIN
+        self.TRAIN = False
 
     def get_blocks(self) -> list:
         """Returns the Darknet architecture as a list of dictionary object"""
@@ -287,6 +288,14 @@ class Darknet(nn.Module):
             return detections
         except NameError:
             return 0
+
+    @contextmanager
+    def train_mode(self):
+        try:
+            self.TRAIN = True
+            yield
+        finally:
+            self.TRAIN = False
 
     def load_weights(self, weight_file_path: str):
         """Loads the pre-trained weights for the obtained Darknet Network

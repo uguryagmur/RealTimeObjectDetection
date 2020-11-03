@@ -8,14 +8,17 @@ import torch
 import argparse
 import torch.nn as nn
 import torch.optim as optim
-from src.dataset import COCO, VOC
 import matplotlib.pyplot as plt
+from validate import DarknetValidator
+from src.dataset import COCO, VOC
 from src.darknet import Darknet
 from src.util import xywh2YOLO, bbox_iou_wh
 
+torch.manual_seed(7)
+
 
 class DarknetTrainer:
-    """Darknet YOLOv3 Network Trainer Class
+    """Darknet YOLO Network Trainer Class
 
     Attributes:
         img_size (list, tuple): Size of the training images
@@ -32,7 +35,7 @@ class DarknetTrainer:
 
     def __init__(self, cfg_file: str, weights_file=None,
                  epoch=10, batch_size=16, resolution=416,
-                 confidence=0.6, num_classes=80, CUDA=False,
+                 confidence=0.6, num_classes=80, patience=3, CUDA=False,
                  TUNE=False) -> None:
         """ Constructor of the Darknet Trainer Class """
 
@@ -43,6 +46,7 @@ class DarknetTrainer:
         self.CUDA = bool(torch.cuda.is_available() and CUDA)
         self.num_classes = num_classes
         self.epoch = epoch
+        self.patience = patience
         self.batch_size = batch_size
         self.resolution = resolution
         self.confidence = confidence
@@ -50,10 +54,10 @@ class DarknetTrainer:
         self.MSELoss = nn.MSELoss(reduction='sum')
         self.BCELoss = nn.BCELoss(reduction='sum')
         self.darknet = Darknet(cfg_file,
-                               self.CUDA,
-                               TRAIN=True)
+                               self.CUDA)
         self.darknet.net_info["height"] = resolution
         self.optimizer = optim.Adam(self.darknet.parameters(), lr=1e-3)
+        self.validator = None
         self.history = dict()
         if cfg_file[-8:-4] == 'tiny':
             self.TINY = True
@@ -189,6 +193,10 @@ class DarknetTrainer:
                              target[obj_mask][..., 5:])
         return loss
 
+    def get_validator(self, annotation_dir, img_dir):
+        self.validator = DarknetValidator(annotation_dir,
+                                          img_dir, confidence=0.6)
+
     @staticmethod
     def progress_bar(curr_epoch, epoch_num, curr_batch, batch_num, loss):
         bar_length = 100
@@ -235,7 +243,7 @@ class DarknetTrainer:
         # memory_epoch = 0
         # stop_training = False
         self.history['train_loss'] = [0]*self.epoch
-        best_loss = None
+        best_metric = None
 
         # dataloader adjustment
         '''
@@ -289,7 +297,8 @@ class DarknetTrainer:
 
                 # making the optimizer gradient zero
                 self.optimizer.zero_grad()
-                pred = self.darknet(batch_data)
+                with self.darknet.train_mode():
+                    pred = self.darknet(batch_data)
                 # t1 = time.time()
                 # prediction = self.activation_pass(prediction)
                 # --> THERE IS NO PROBLEM UNTIL THERE
@@ -317,14 +326,34 @@ class DarknetTrainer:
                 running_loss += loss.item()
                 self.progress_bar(epoch, self.epoch, batch+1,
                                   batch_num, loss.item())
-
                 torch.cuda.empty_cache()
-            if best_loss is None or running_loss < best_loss:
-                best_loss = running_loss
-                torch.save(self.darknet.state_dict(),
-                           'weights/checkpoint')
-                torch.save(self.optimizer.state_dict(),
-                           'weights/checkpoint_opt')
+
+            if self.validator is None:
+                if best_metric is None or running_loss > best_metric:
+                    best_metric = running_loss
+                    best_epoch = epoch
+                    torch.save(self.darknet.state_dict(),
+                               'weights/checkpoint')
+                    torch.save(self.optimizer.state_dict(),
+                               'weights/checkpoint_opt')
+
+                elif best_epoch + self.patience < epoch:
+                    print('Due to validation failure, training is cancelled')
+                    break
+
+            else:
+                self.validator.validate_model(self.darknet, CUDA=self.CUDA)
+                if best_metric is None or self.validator.f_score > best_metric:
+                    best_metric = self.validator.f_score
+                    best_epoch = epoch
+                    torch.save(self.darknet.state_dict(),
+                               'weights/checkpoint')
+                    torch.save(self.optimizer.state_dict(),
+                               'weights/checkpoint_opt')
+
+                elif best_epoch + self.patience < epoch:
+                    print('Due to validation failure, training is cancelled')
+                    break
 
             end = time.time()
             self.epoch_loss(running_loss, self.dataset.__len__())
@@ -354,8 +383,9 @@ VOCdevkit/VOC2012/Annotations'
     img_def_VOC = '/home/adm1n/Datasets/SPAutoencoder/VOC2012'
     cfg_def = 'cfg/yolov3-tiny.cfg'
     weights_def = 'weights/yolov3-tiny.weights'
-    ann_def_COCO = '/home/ubuntu/extra/data/'
-    img_def_COCO = '/home/ubuntu/extra/data/'
+    ann_def_COCO = '/home/adm1n/Datasets/COCO/2017\
+/annotations/instances_val2017.json'
+    img_def_COCO = '/home/adm1n/Datasets/COCO/2017/val2017'
 
     # argument parsing
     parser = argparse.ArgumentParser(description='YOLO v3 Training Module')
@@ -392,6 +422,10 @@ VOCdevkit/VOC2012/Annotations'
     return parser.parse_args()
 
 
+annot_dir = '/home/adm1n/Datasets/COCO/2017/annotations\
+/instances_val2017.json'
+img_dir = '/home/adm1n/Datasets/COCO/2017/val2017/'
+
 if __name__ == '__main__':
     args = arg_parse()
     xml_dir = args.xml
@@ -410,4 +444,5 @@ if __name__ == '__main__':
                              batch_size=batch_size,
                              resolution=reso, confidence=confidence,
                              CUDA=CUDA, TUNE=TUNE)
+    trainer.get_validator(annot_dir, img_dir)
     trainer.train(xml_dir, img_dir)

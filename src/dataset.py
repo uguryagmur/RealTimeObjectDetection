@@ -234,22 +234,17 @@ class COCO(Dataset):
             bbox = torch.stack(bbox, dim=0)
         if not self.keep_img_name:
             if not self.only_gt:
-                print('IF 1')
                 return img, bbox
             else:
-                print('IF 2')
                 return bbox
 
         else:
             if not self.only_gt:
-                print('IF 3')
                 return img_name, img, bbox
             else:
-                print('IF 4')
                 return img_name, bbox
 
     def collate_fn(self, batch):
-        print(batch)
         if not self.only_gt:
             if not self.keep_img_name:
                 img, bbox = zip(*batch)
