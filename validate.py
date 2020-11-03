@@ -133,8 +133,8 @@ class DarknetValidator:
             self.save_img_scores_(img_name, people_num, true_positive,
                                   false_positive, false_negative)
 
-        # self.save_total_scores_(people_num, true_positive,
-        #                         false_negative, false_positive)
+        self.save_total_scores_(people_num, true_positive,
+                                false_negative, false_positive)
 
     def save_scores(self, img_score_dir=None, total_score_dir=None):
         if img_score_dir is not None:
@@ -161,17 +161,17 @@ class DarknetValidator:
             pred = self.pred_filter(pred, [0])
             self.get_img_scores(img_name, pred, bndbox, img_scores)
 
-        tp = self.total_scores['tp']
-        fp = self.total_scores['fp']
-        fn = self.total_scores['fn']
-        self.precision = torch.tensor(tp/(tp + fp))
-        self.recall = torch.tensor(tp/(tp + fn))
+        tp = torch.tensor(self.total_scores['tp']).float()
+        fp = torch.tensor(self.total_scores['fp']).float()
+        fn = torch.tensor(self.total_scores['fn']).float()
+        self.precision = (tp/(tp + fp)).clone()
+        self.recall = (tp/(tp + fn)).clone()
         self.f_score = (2/((1/self.recall) + (1/self.precision))).clone()
         print('\tPrecision = ', self.precision)
         print('\tRecall = ', self.recall)
         print('\tF_Score = ', self.f_score)
-        self.save_scores(img_score_dir='img_scores.json',
-                         total_score_dir='total_scores.json')
+        # self.save_scores(img_score_dir='img_scores.json',
+        #                  total_score_dir='total_scores.json')
 
     def validate_json(self, json_dir, img_scores=False):
         pred_dict = json.load(open(json_dir, 'r'))
@@ -184,11 +184,11 @@ class DarknetValidator:
                 pred = self.pred_filter(pred, [0])
                 self.get_img_scores(img_name, pred, bndbox, img_scores=True)
 
-        tp = self.total_scores['tp']
-        fp = self.total_scores['fp']
-        fn = self.total_scores['fn']
-        self.precision = torch.tensor(tp/(tp + fp))
-        self.recall = torch.tensor(tp/(tp + fn))
+        tp = torch.tensor(self.total_scores['tp']).float()
+        fp = torch.tensor(self.total_scores['fp']).float()
+        fn = torch.tensor(self.total_scores['fn']).float()
+        self.precision = (tp/(tp + fp)).clone()
+        self.recall = (tp/(tp + fn)).clone()
         self.f_score = (2/((1/self.recall) + (1/self.precision))).clone()
         print('\tPrecision = ', self.precision)
         print('\tRecall = ', self.recall)

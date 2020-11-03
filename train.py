@@ -242,7 +242,10 @@ class DarknetTrainer:
         # mem_loss = 0.0
         # memory_epoch = 0
         # stop_training = False
-        self.history['train_loss'] = [0]*self.epoch
+        self.history['train_loss'] = []
+        self.history['train_precision'] = []
+        self.history['train_recall'] = []
+        self.history['train_f_score'] = []
         best_metric = None
 
         # dataloader adjustment
@@ -343,6 +346,10 @@ class DarknetTrainer:
 
             else:
                 self.validator.validate_model(self.darknet, CUDA=self.CUDA)
+                self.history['train_precision'].append(
+                    self.validator.precision)
+                self.history['train_recall'].append(self.validator.recall)
+                self.history['train_f_score'].append(self.validator.f_score)
                 if best_metric is None or self.validator.f_score > best_metric:
                     best_metric = self.validator.f_score
                     best_epoch = epoch
@@ -358,20 +365,28 @@ class DarknetTrainer:
             end = time.time()
             self.epoch_loss(running_loss, self.dataset.__len__())
             self.epoch_ETA(start, end, self.epoch-epoch)
-            self.history['train_loss'][epoch-1] = running_loss/(batch_num)
+            self.history['train_loss'].append(running_loss/(batch_num))
 
         # when the training is finished
-        print('Training is finished !!\n')
         torch.save(self.darknet.state_dict(),
                    'weights/training_output')
         torch.save(self.optimizer.state_dict(),
                    'weights/training_output_opt')
-        epochs = [item for item in range(1, self.epoch+1)]
+        epochs = [item for item in range(1, epoch+1)]
         plt.plot(epochs, self.history['train_loss'], color='red')
-        # plt.plot(epochs, self.history['val_loss'], color='blue')
         plt.xlabel('epoch number')
         plt.ylabel('loss')
         plt.savefig('weights/loss_graph.png')
+        plt.clf()
+        if self.validator is not None:
+            plt.plot(epochs, self.history['train_precision'], color='blue')
+            plt.plot(epochs, self.history['train_recall'], color='green')
+            plt.plot(epochs, self.history['train_f_score'], color='yellow')
+            plt.legend(['precision', 'recall', 'f_score'])
+            plt.xlabel('epoch number')
+            plt.ylabel('metrics')
+            plt.savefig('weights/metric_graph.png')
+        print('Training is finished !!\n')
 
 
 def arg_parse():
