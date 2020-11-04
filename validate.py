@@ -94,8 +94,7 @@ class DarknetValidator:
                 box_ious[:, max_ind[ind]].size())
             true_positive += 1
 
-        false_negative = target.size(0) - true_positive
-        return true_positive, false_negative
+        return true_positive
 
     def save_img_scores_(self, img_name, people_num, tp, fp, fn):
         self.image_scores[img_name] = {'people_num': people_num,
@@ -122,10 +121,10 @@ class DarknetValidator:
             false_positive = pred.size(0)
         elif type(pred) != int and target is not None:
             people_num = target.size(0)
-            true_positive, false_positive = self.compare_boxes(pred,
-                                                               target, 0.4)
-        false_negative = people_num - true_positive
+            true_positive = self.compare_boxes(pred, target, 0.4)
+            false_positive = pred.size(0) - true_positive
 
+        false_negative = people_num - true_positive
         # print(img_name, people_num, true_positive,
         #       false_positive, false_negative)
 
@@ -134,7 +133,7 @@ class DarknetValidator:
                                   false_positive, false_negative)
 
         self.save_total_scores_(people_num, true_positive,
-                                false_negative, false_positive)
+                                false_positive, false_negative)
 
     def save_scores(self, img_score_dir=None, total_score_dir=None):
         if img_score_dir is not None:
@@ -204,7 +203,8 @@ if __name__ == '__main__':
 /instances_val2017.json'
     img_dir = '/home/adm1n/Datasets/COCO/2017/val2017/'
     model = Darknet(cfg_file, CUDA=True).cuda()
-    model.load_weights(weights_file)
+    # model.load_weights(weights_file)
+    model.load_state_dict(torch.load('weights/checkpoint'))
     # model.load_state_dict(torch.load('weights/experiment3/checkpoint8'))
     validator = DarknetValidator(annot_dir, img_dir)
     validator.validate_model(model, CUDA=True, img_scores=True)

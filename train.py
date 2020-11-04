@@ -340,9 +340,9 @@ class DarknetTrainer:
                     torch.save(self.optimizer.state_dict(),
                                'weights/checkpoint_opt')
 
-                elif best_epoch + self.patience < epoch:
-                    print('Due to validation failure, training is cancelled')
-                    break
+                # elif best_epoch + self.patience < epoch:
+                #     print('Due to validation failure, training is cancelled')
+                #     break
 
             else:
                 self.validator.validate_model(self.darknet, CUDA=self.CUDA)
@@ -358,9 +358,9 @@ class DarknetTrainer:
                     torch.save(self.optimizer.state_dict(),
                                'weights/checkpoint_opt')
 
-                elif best_epoch + self.patience < epoch:
-                    print('Due to validation failure, training is cancelled')
-                    break
+                # elif best_epoch + self.patience < epoch:
+                #     print('Due to validation failure, training is cancelled')
+                #     break
 
             end = time.time()
             self.epoch_loss(running_loss, self.dataset.__len__())

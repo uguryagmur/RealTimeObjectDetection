@@ -4,6 +4,7 @@ import glob
 import json
 import torch
 import numpy as np
+from sys import stderr
 from PIL import Image
 from PIL import ImageDraw
 from contextlib import contextmanager
@@ -165,22 +166,21 @@ class COCO(Dataset):
         self.deleted_cls = [12, 26, 29, 30, 45, 66, 68, 69, 71, 83, 91]
         self.keep_img_name = keep_img_name
         self.only_gt = only_ground_truth
-        # with open('COCO_val_objs.json', 'w') as file:
-        #     json.dump(self.objs, file)
-        # with open('COCO_val_img_ids.json', 'w') as file:
-        #     json.dump(self.img_ids, file)
 
     def read_annotations(self, anotations_json, non_crowd=True):
         ann = json.load(open(anotations_json))
-        self.img_set = {i['id']: i for i in ann['images']}
         if non_crowd:
-            self.objs = [i for i in ann['annotations']
-                         if not i['iscrowd']]
-            self.img_ids = [i['image_id'] for i in ann['annotations']
-                            if not i['iscrowd']]
+            img_ids = [i['image_id'] for i in ann['annotations']
+                       if not i['iscrowd']]
         else:
-            self.objs = [i for i in ann['annotations']]
-            self.img_ids = [i['image_id'] for i in ann['annotations']]
+            img_ids = [i['image_id'] for i in ann['annotations']]
+        self.img_ids = list(set(img_ids))
+        self.img_annotations = {i: [] for i in self.img_ids}
+        self.images = {i['id']: i for i in ann['images']}
+        for id_ in self.img_ids:
+            for annot in ann['annotations']:
+                if annot['image_id'] == id_:
+                    self.img_annotations[id_].append(annot)
 
     def coco2yolo(self, category_id):
         ex = 0
@@ -189,23 +189,23 @@ class COCO(Dataset):
                 return category_id - ex
             ex += 1
         if category_id - ex < 0:
-            print('CATEGORY_ID ERROR')
+            print('CATEGORY_ID ERROR', file=stderr)
             exit()
         return category_id - ex
 
     def __len__(self):
-        return len(self.img_set)
+        return len(self.img_ids)
 
     def __getitem__(self, index):
         id_ = self.img_ids[index]
-        img = self.img_dir + self.img_set[id_]['file_name']
+        img = self.img_dir + self.images[id_]['file_name']
         img = Image.open(img).convert('RGB')
         if self.keep_img_name:
-            img_name = self.img_set[id_]['file_name']
+            img_name = self.images[id_]['file_name']
 
         # obtaining the image size
-        max_im_size = max(img.size)
         w, h = img.size
+        max_im_size = max(w, h)
         ratio = float(self.resolution/max_im_size)
 
         # calculating paddings for bboxes
@@ -215,19 +215,18 @@ class COCO(Dataset):
             img = prep_image(img, self.resolution, mode='RGB').squeeze(0)
 
         bbox = []
-        for obj in self.objs:
-            if obj['image_id'] == id_:
-                cls_encoding = [1.0]
-                cls_encoding.extend([0]*80)
-                # print(obj['category_id'], self.coco2yolo(obj['category_id']))
-                cls_encoding[self.coco2yolo(obj['category_id'])] = 1.0
-                box = obj['bbox'][:5]
-                box.extend(cls_encoding)
-                box = torch.FloatTensor(box)
-                box[:4] *= ratio
-                box[0] += box[2]/2 + pad[0]
-                box[1] += box[3]/2 + pad[1]
-                bbox.append(box)
+        for boxes in self.img_annotations[id_]:
+            cls_encoding = [1.0]
+            cls_encoding.extend([0]*80)
+            # print(obj['category_id'], self.coco2yolo(obj['category_id']))
+            cls_encoding[self.coco2yolo(boxes['category_id'])] = 1.0
+            box = boxes['bbox'][:5]
+            box.extend(cls_encoding)
+            box = torch.FloatTensor(box)
+            box[:4] *= ratio
+            box[0] += box[2]/2 + pad[0]
+            box[1] += box[3]/2 + pad[1]
+            bbox.append(box)
 
         # draw_boxes(img, bbox, 'coco_val_with_box/'+img_name)
         if bbox != []:
@@ -293,7 +292,7 @@ COCO/2017/annotations/instances_val2017.json'
     dset = COCO(json_path, img_path)
     # print(dset.__len__())
     # print(Dset.__len__())
-    img, bbox = dset.__getitem__(6)
+    img, bbox = dset.__getitem__(19)
     img = img.transpose(0, 1).transpose(1, 2).numpy()
     img = Image.fromarray(np.uint8(img*255))
     draw = ImageDraw.Draw(img)
