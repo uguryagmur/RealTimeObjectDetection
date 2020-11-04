@@ -175,12 +175,8 @@ class COCO(Dataset):
         else:
             img_ids = [i['image_id'] for i in ann['annotations']]
         self.img_ids = list(set(img_ids))
-        self.img_annotations = {i: [] for i in self.img_ids}
+        self.img_annotations = ann['annotations']
         self.images = {i['id']: i for i in ann['images']}
-        for id_ in self.img_ids:
-            for annot in ann['annotations']:
-                if annot['image_id'] == id_:
-                    self.img_annotations[id_].append(annot)
 
     def coco2yolo(self, category_id):
         ex = 0
@@ -215,18 +211,19 @@ class COCO(Dataset):
             img = prep_image(img, self.resolution, mode='RGB').squeeze(0)
 
         bbox = []
-        for boxes in self.img_annotations[id_]:
-            cls_encoding = [1.0]
-            cls_encoding.extend([0]*80)
-            # print(obj['category_id'], self.coco2yolo(obj['category_id']))
-            cls_encoding[self.coco2yolo(boxes['category_id'])] = 1.0
-            box = boxes['bbox'][:5]
-            box.extend(cls_encoding)
-            box = torch.FloatTensor(box)
-            box[:4] *= ratio
-            box[0] += box[2]/2 + pad[0]
-            box[1] += box[3]/2 + pad[1]
-            bbox.append(box)
+        for annot in self.img_annotations:
+            if annot['image_id'] == id_:
+                cls_encoding = [1.0]
+                cls_encoding.extend([0]*80)
+                # print(obj['category_id'], self.coco2yolo(obj['category_id']))
+                cls_encoding[self.coco2yolo(annot['category_id'])] = 1.0
+                box = annot['bbox'][:5]
+                box.extend(cls_encoding)
+                box = torch.FloatTensor(box)
+                box[:4] *= ratio
+                box[0] += box[2]/2 + pad[0]
+                box[1] += box[3]/2 + pad[1]
+                bbox.append(box)
 
         # draw_boxes(img, bbox, 'coco_val_with_box/'+img_name)
         if bbox != []:
@@ -292,7 +289,7 @@ COCO/2017/annotations/instances_val2017.json'
     dset = COCO(json_path, img_path)
     # print(dset.__len__())
     # print(Dset.__len__())
-    img, bbox = dset.__getitem__(19)
+    img, bbox = dset.__getitem__(7)
     img = img.transpose(0, 1).transpose(1, 2).numpy()
     img = Image.fromarray(np.uint8(img*255))
     draw = ImageDraw.Draw(img)
