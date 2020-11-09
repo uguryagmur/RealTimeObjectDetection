@@ -181,13 +181,13 @@ class DarknetTrainer:
 
     def YOLO_loss(self, pred, target, obj_mask):
         no_obj_mask = (torch.ones(obj_mask.size()) - obj_mask.float()).bool()
-        loss = 50*self.MSELoss(pred[obj_mask][..., :2],
-                               target[obj_mask][..., :2])
-        loss += 50*self.MSELoss(pred[obj_mask][..., 2:4],
-                                target[obj_mask][..., 2:4])
-        loss += 10*self.MSELoss(pred[obj_mask][..., 4],
-                                target[obj_mask][..., 4])
-        loss += 0.1*self.MSELoss(pred[no_obj_mask][..., 4],
+        loss = 5*self.MSELoss(pred[obj_mask][..., :2],
+                              target[obj_mask][..., :2])
+        loss += 5*self.MSELoss(pred[obj_mask][..., 2:4],
+                               target[obj_mask][..., 2:4])
+        loss += 1*self.MSELoss(pred[obj_mask][..., 4],
+                               target[obj_mask][..., 4])
+        loss += 0.5*self.MSELoss(pred[no_obj_mask][..., 4],
                                  target[no_obj_mask][..., 4])
         loss += self.MSELoss(pred[obj_mask][..., 5:],
                              target[obj_mask][..., 5:])
@@ -216,8 +216,10 @@ class DarknetTrainer:
             print('\r'+bar, end='')
 
     @staticmethod
-    def epoch_ETA(time1, time2, remaining_epoch) -> None:
-        delta = (time2 - time1)*remaining_epoch
+    def epoch_ETA(*args, remaining_epoch) -> None:
+        assert len(args) == 2
+        delta = sum([args[i] - args[i+1] for i in range(0, len(args), 2)])
+        delta *= remaining_epoch
         ETA_h = int(delta/3600)
         ETA_m = int((delta % 3600)/60)
         ETA_s = int((delta % 3600) % 60)
@@ -261,7 +263,7 @@ class DarknetTrainer:
         batch_num = self.data_num//self.batch_size + 1
         for epoch in range(1, self.epoch+1):
             running_loss = 0.0
-            start = time.time()
+            t_start = time.time()
 
             # training mini-batches
             for batch, batch_samples in enumerate(self.dataloader):
@@ -331,18 +333,16 @@ class DarknetTrainer:
                                   batch_num, loss.item())
                 torch.cuda.empty_cache()
 
+            torch.save(self.darknet.state_dict(),
+                       'weights/weight_epoch' + str(epoch))
+
             if self.validator is None:
                 if best_metric is None or running_loss > best_metric:
                     best_metric = running_loss
-                    best_epoch = epoch
                     torch.save(self.darknet.state_dict(),
                                'weights/checkpoint')
                     torch.save(self.optimizer.state_dict(),
                                'weights/checkpoint_opt')
-
-                # elif best_epoch + self.patience < epoch:
-                #     print('Due to validation failure, training is cancelled')
-                #     break
 
             else:
                 self.validator.validate_model(self.darknet, CUDA=self.CUDA)
@@ -352,19 +352,14 @@ class DarknetTrainer:
                 self.history['train_f_score'].append(self.validator.f_score)
                 if best_metric is None or self.validator.f_score > best_metric:
                     best_metric = self.validator.f_score
-                    best_epoch = epoch
                     torch.save(self.darknet.state_dict(),
                                'weights/checkpoint')
                     torch.save(self.optimizer.state_dict(),
                                'weights/checkpoint_opt')
 
-                # elif best_epoch + self.patience < epoch:
-                #     print('Due to validation failure, training is cancelled')
-                #     break
-
-            end = time.time()
+            t_end = time.time()
             self.epoch_loss(running_loss, self.dataset.__len__())
-            self.epoch_ETA(start, end, self.epoch-epoch)
+            self.epoch_ETA(t_start, t_end, remaining_epoch=(self.epoch-epoch))
             self.history['train_loss'].append(running_loss/(batch_num))
 
         # when the training is finished
@@ -372,7 +367,7 @@ class DarknetTrainer:
                    'weights/training_output')
         torch.save(self.optimizer.state_dict(),
                    'weights/training_output_opt')
-        epochs = [item for item in range(1, epoch+1)]
+        epochs = [item for item in range(1, len(self.history['train_loss'])+1)]
         plt.plot(epochs, self.history['train_loss'], color='red')
         plt.xlabel('epoch number')
         plt.ylabel('loss')

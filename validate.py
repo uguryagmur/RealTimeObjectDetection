@@ -141,6 +141,22 @@ class DarknetValidator:
         if total_score_dir is not None:
             json.dump(self.total_scores, open(total_score_dir, 'w'))
 
+    @staticmethod
+    def progress_bar(curr_batch, batch_num):
+        bar_length = 100
+        percent = curr_batch/(batch_num-1)*100
+        bar = 'Validation Process: '
+        bar += '\t\t\t{:>3.2f}% '.format(percent)
+        percent = round(percent)
+        bar += '|' + '=' * int(percent*bar_length/100)
+        if curr_batch == batch_num - 1:
+            bar += ' ' * (bar_length - int(percent*bar_length/100)) + '|'
+            print('\r'+bar)
+        else:
+            bar += '>'
+            bar += ' ' * (bar_length - int(percent*bar_length/100)) + '|'
+            print('\r'+bar, end='')
+
     def validate_model(self, model: Darknet, CUDA=False, img_scores=False):
         for batch, data in enumerate(self.dataloader):
             img_name = data[0][0]
@@ -159,6 +175,7 @@ class DarknetValidator:
             # applying filters for certain classes
             pred = self.pred_filter(pred, [0])
             self.get_img_scores(img_name, pred, bndbox, img_scores)
+            self.progress_bar(batch, self.data_num)
 
         tp = torch.tensor(self.total_scores['tp']).float()
         fp = torch.tensor(self.total_scores['fp']).float()
@@ -182,6 +199,7 @@ class DarknetValidator:
                 bndbox = self.target_filter(bndbox, [0], min_box_size=24)
                 pred = self.pred_filter(pred, [0])
                 self.get_img_scores(img_name, pred, bndbox, img_scores=True)
+                self.progress_bar(batch, self.data_num)
 
         tp = torch.tensor(self.total_scores['tp']).float()
         fp = torch.tensor(self.total_scores['fp']).float()
@@ -197,14 +215,13 @@ class DarknetValidator:
 
 
 if __name__ == '__main__':
-    cfg_file = 'cfg/yolov3-tiny.cfg'
-    weights_file = 'weights/yolov3-tiny.weights'
+    cfg_file = 'cfg/yolov3.cfg'
+    weights_file = 'weights/yolov3.weights'
     annot_dir = '/home/adm1n/Datasets/COCO/2017/annotations\
 /instances_val2017.json'
     img_dir = '/home/adm1n/Datasets/COCO/2017/val2017/'
     model = Darknet(cfg_file, CUDA=True).cuda()
-    # model.load_weights(weights_file)
-    model.load_state_dict(torch.load('weights/checkpoint'))
+    model.load_weights(weights_file)
     # model.load_state_dict(torch.load('weights/experiment3/checkpoint8'))
     validator = DarknetValidator(annot_dir, img_dir)
     validator.validate_model(model, CUDA=True, img_scores=True)
