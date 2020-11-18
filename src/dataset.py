@@ -124,6 +124,16 @@ found.""".format(xml_directory, fformat))
 
     @staticmethod
     def collate_fn(batch):
+        """
+        Collate function for the dataloader of the dataset
+
+        Parameters:
+            batch (list): data samples of the current batch
+
+        Returns:
+            img (torch.Tensor): image samples of the current batch
+            bndbox (list): list of bounding box tensors for every image
+        """
         img, bndbox = zip(*batch)
         img = torch.stack(img, dim=0)
         return img, bndbox
@@ -150,7 +160,18 @@ found.""".format(xml_directory, fformat))
 
 
 class COCO(Dataset):
-    '''COCO Dataset DataLoader for Object Detection'''
+    """COCO Dataset DataLoader for Object Detection
+
+    Attributes:
+        img_ids (list): list of image ids of the COCO dataset
+        img_annotations (dict): dictionary of the image annotations
+        images (dict): information about images and their URLs
+        resolution (int): resolution of the training
+        img_dir (str): path of the folder containing the COCO images
+        deleted_cls (list): list of the deletec class for the corresponding dataset
+        keep_img_name (bool): flag to return image names for each sample
+        only_gt (bool): flag to return ground truth of the images without image data
+    """
 
     def __init__(self, anotations_json, img_dir,
                  resolution=416, keep_img_name=False,
@@ -168,6 +189,14 @@ class COCO(Dataset):
         self.only_gt = only_ground_truth
 
     def read_annotations(self, anotations_json, non_crowd=True):
+        """The method to read annotation files of the COCO dataset
+        and store them in the dictionary and list objects
+
+        Parameters:
+            anotations_json (str): annotation file directory
+            non_crowd (bool): flag to choose only non_crowd images
+        """
+
         ann = json.load(open(anotations_json))
         if non_crowd:
             img_ids = [i['image_id'] for i in ann['annotations']
@@ -179,6 +208,12 @@ class COCO(Dataset):
         self.images = {i['id']: i for i in ann['images']}
 
     def coco2yolo(self, category_id):
+        """This function converts the COCO dataset labels for the corresponding
+        Darknet YOLO detector network label
+
+        Parameters:
+            category_id (int): category_id label for the corresponding bounding box
+        """
         ex = 0
         for i in range(len(self.deleted_cls)):
             if category_id < self.deleted_cls[i]:
@@ -190,9 +225,23 @@ class COCO(Dataset):
         return category_id - ex
 
     def __len__(self):
+        r"""The function to learn length of the adjusted dataset
+
+        Returns:
+            Integer: Length of the dataset
+        """
         return len(self.img_ids)
 
     def __getitem__(self, index):
+        r"""The function to get an item from the dataset
+
+        Parameters:
+            i (int): index integer to get file from list
+
+        Returns:
+            torch.tensor: Given image data in a torch.tensor form
+        """
+
         id_ = self.img_ids[index]
         img = self.img_dir + self.images[id_]['file_name']
         img = Image.open(img).convert('RGB')
@@ -241,6 +290,16 @@ class COCO(Dataset):
                 return img_name, bbox
 
     def collate_fn(self, batch):
+        """
+        Collate function for the dataloader of the dataset
+
+        Parameters:
+            batch (list): data samples of the current batch
+
+        Returns:
+            img (torch.Tensor): image samples of the current batch
+            bndbox (list): list of bounding box tensors for every image
+        """
         if not self.only_gt:
             if not self.keep_img_name:
                 img, bbox = zip(*batch)
@@ -260,6 +319,9 @@ class COCO(Dataset):
 
     @contextmanager
     def only_ground_truth(self):
+        """Activates the only ground truth mode for the COCO dataset in which
+        dataloader only load the ground truth of the corresponding images
+        """
         try:
             self.only_gt = True
             yield
@@ -267,6 +329,18 @@ class COCO(Dataset):
             self.only_gt = False
 
     def get_dataloader(self, batch_size, shuffle=True, num_workers=4):
+        r"""The function to create a dataloader for the dataset class
+
+        Parameters:
+            batch_size (int): Batch size of the training set
+            shuffle (bool): Whether you want shuffling or not
+            split (bool): If the dataset is splitted, it returns 2 dataloaders
+            num_workers (int): Number of subprocesses to use for data loading.
+
+        Returns:
+            DataLoader, DataLoader: torch DataLoader object for training and
+            validation sets
+        """
         dloader = DataLoader(self, batch_size=batch_size,
                              collate_fn=self.collate_fn,
                              shuffle=shuffle,
@@ -304,15 +378,3 @@ COCO/2017/annotations/instances_val2017.json'
         bbox[3] = int(box[1] + box[3]/2)
         draw.rectangle(bbox, outline='red')
     img.show()
-    # img, bbox = Dset.__getitem__(13)
-    # print(img.shape)
-    # print('--------o--------')
-    # print(bbox)
-    # dloader = dset.get_dataloader(batch_size=4)
-    # diter = iter(dloader)
-    # img, bbox = diter.next()
-    # print(img.shape)
-    # print('--------o--------')
-    # print(len(bbox))
-    # for img, bbox in diter:
-    # pass

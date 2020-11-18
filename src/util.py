@@ -1,4 +1,4 @@
-"""DOCSTRING will be added later"""
+"""Utility functions for Object Detection Networks"""
 from __future__ import division
 
 import cv2
@@ -8,7 +8,15 @@ from PIL import Image, ImageDraw
 
 
 def xyxy2xywh(box: torch.Tensor) -> torch.Tensor:
-    """DOCSTRING will be added later"""
+    """
+        Returns the xywh format of the input bounding box tensor
+
+        Arguments:
+            box (torch.Tensor): Bounding box tensor in xyxy format
+
+        Output:
+            output (torch.Tensor): Bounding box tensor in xywh format
+    """
     output = torch.zeros(box.size())
     output[..., 0] = (box[..., 2] + box[..., 0])/2
     output[..., 1] = (box[..., 3] + box[..., 1])/2
@@ -19,7 +27,15 @@ def xyxy2xywh(box: torch.Tensor) -> torch.Tensor:
 
 
 def xywh2xyxy(box: torch.Tensor) -> torch.Tensor:
-    """DOCSTRING will be added later"""
+    """
+        Returns the xyxy format of the input bounding box tensor
+
+        Arguments:
+            box (torch.Tensor): Bounding box tensor in xywh format
+
+        Output:
+            output (torch.Tensor): Bounding box tensor in xyxy format
+    """
     output = torch.zeros(box.size())
     output[..., 0] = (box[..., 0] - box[..., 2]/2)
     output[..., 1] = (box[..., 1] - box[..., 3]/2)
@@ -31,7 +47,23 @@ def xywh2xyxy(box: torch.Tensor) -> torch.Tensor:
 
 def xywh2YOLO(box: torch.Tensor, stride: float,
               anchor: tuple):
-    """DOCSTRING will be added later"""
+    """
+        Returns the bounding box in a format similar to the last output
+        layer of the YOLO
+
+        Arguments:
+            box (torch.Tensor): Boudning box tensor in xywh format
+            stride (float): stride of the current layer to decrease the size
+            anchor (list): it is a list of tuples of anchor boxes
+
+        Outputs:
+            x_coor (int): x coordinate of the detection grid for the given box
+            y_coor (int): y coordinate of the detection grid for the given box
+            x   (float): x output of the YOLO layer for the corresponding box
+            y   (float): y output of the YOLO layer for the corresponding box
+            w   (float): w output of the YOLO layer for the corresponding box
+            h   (float): h output of the YOLO layer for the corresponding box
+    """
     x = box[..., 0].item()/stride
     x_coor = int(box[..., 0].item()/stride)
     y = box[..., 1].item()/stride
@@ -44,7 +76,16 @@ def xywh2YOLO(box: torch.Tensor, stride: float,
 
 
 def draw_boxes(img: torch.Tensor, bbox: torch.Tensor,
-               img_dir, from_tensor=False):
+               from_tensor=False):
+    """
+        Draws the given bounding boxes on the sample image and show it to
+        user to check whether the comming data is correct or not
+
+        Arguments:
+            img (torch.Tensor, PIL.Image): Image sample
+            bbox (torch.Tensor): Bounding box for corresponding image
+            from_tensor (bool): Flag for whether the input is tensor or PIL image
+    """
     if from_tensor:
         img = img.transpose(0, 1).transpose(1, 2).numpy()*255
         img = Image.fromarray(np.uint8(img))
@@ -60,11 +101,17 @@ def draw_boxes(img: torch.Tensor, bbox: torch.Tensor,
         bbox[3] = int(box[1] + box[3]/2)
         draw.rectangle(bbox, outline='red')
     img.show()
-    # img.save(img_dir)
 
 
 def confidence_mask(tensor: torch.Tensor, confidence: float) -> torch.Tensor:
-    """DOCSTRING will be added later"""
+    """
+        Returns the masked form of the input tensor with respect to given
+        confidence
+
+        Arguments:
+            tensor (torch.Tensor): tensor to be masked by confidence
+            confidence (float): confidence score to use in masking
+    """
     # confidence masking for direct output of the YOLO layer
     conf_mask = (tensor[:, :, 4] > confidence).float().unsqueeze(2)
     return tensor*conf_mask
@@ -77,6 +124,9 @@ def bbox_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
     Arguments:
         box1 (torch.Tensor) : coor tensor of the first box to calculate IoU
         box2 (torch.Tensor) : coor tensor of the first box to calculate IoU
+
+    Returns:
+        iou  (float): intersection/union ratio for the given bounding boxes
     """
     # get the coordinates of bounding boxes
     b1_x1, b1_y1 = box1[..., 0], box1[..., 1]
@@ -104,7 +154,17 @@ def bbox_iou(box1: torch.Tensor, box2: torch.Tensor) -> torch.Tensor:
 
 
 def bbox_iou_wh(wh1: tuple, wh2: tuple) -> float:
-    """DOCSTRING will be added later"""
+    """
+        Returns the IoU value between an anchor box and bounding
+        box width and height
+
+        Arguments:
+            wh1 (tuple, list): width and height pair for first box
+            wh2 (tuple, list): width and height pair for second box
+
+        Returns:
+            iou (float): intersection/union for given w-h pairs
+    """
     w1, h1 = wh1[0], wh1[1]
     w2, h2 = wh2[0], wh2[0]
     intersect_area = min(w1, w2) * min(h1, h2)
@@ -112,18 +172,22 @@ def bbox_iou_wh(wh1: tuple, wh2: tuple) -> float:
     return intersect_area/union_area
 
 
-# this function is fixed and won't cut the autograd backward graph
 def predict_transform(prediction, inp_dim, anchors, num_class,
                       CUDA, TRAIN=False) -> torch.Tensor:
     """
     Returns the prediction tensor with respect to the output of the YOLO
-    Detection Layer
+    Detection Layers outputs
 
     Arguements:
         prediction (torch.Tensor) : output tensor of the Detection Layer
         inp_dim (torch.Tensor) : input image dimensions
         anchors (torch.Tensor) : anchors of the Darknet
         num_class (int) : number of classes can be detected by Darknet
+        CUDA (bool): CUDA
+        TRAIN (bool):
+
+    Returns:
+        detection (torch.Tensor): masked and reorganized form of the detection
     """
 
     batch_size = prediction.size(0)
@@ -152,11 +216,11 @@ def predict_transform(prediction, inp_dim, anchors, num_class,
         anchors = torch.FloatTensor(anchors)
 
         # add the center offsets
-        grid = np.arange(grid_size)
-        a, b = np.meshgrid(grid, grid)
+        grid = torch.arange(grid_size)
+        b, a = torch.meshgrid(grid, grid)
 
-        x_offset = torch.FloatTensor(a).view(-1, 1)
-        y_offset = torch.FloatTensor(b).view(-1, 1)
+        x_offset = a.reshape(-1, 1)
+        y_offset = b.reshape(-1, 1)
 
         if CUDA:
             anchors = anchors.cuda()
@@ -182,11 +246,14 @@ def write_results(prediction, num_class, confidence=0.6,
     as bounding boxes and class of the object
 
     Arguments:
-        prediction (torch.Tensor) : prediction output of the
-                    predict_transform function
-        confidence (float) : confidence of the detection
+        prediction (torch.Tensor) : output of the Darknet network
         num_class (int) : number of classes can be detected by Darknet
-        nms_conf (float) : non-max supression confidence (default=0.4)
+        confidence (float) : confidence of the detection
+        nms_conf (float) : non-max supression threshold (default=0.4)
+
+    Returns:
+        output (torch.Tensor, int): Returns 0 if there is no detection and
+            returns the bounding boxes attributes of darknet for each object
     """
 
     # confidence masking
@@ -286,6 +353,9 @@ def letterbox_image(img, inp_dim) -> np.ndarray:
     Arguments:
         img (np.ndarray) : image which will be reshaped as numpy array
         inp_dim (list) : Darknet input image dimensions
+
+    Returns:
+        canvas (np.ndarray): Resized and padded input image for Darknet
     """
     img_w, img_h = img.shape[1], img.shape[0]
     w, h = inp_dim
@@ -309,6 +379,9 @@ def prep_image(img, inp_dim, mode='BGR') -> torch.Tensor:
     Arguments:
         img (np.ndarray) : input image as numpy array form
         inp_dim (list) : input image dimensions
+
+    Returns:
+        img (torch.Tensor): Transposed, padded and resized input image
     """
 
     assert mode == 'BGR' or mode == 'RGB'
@@ -329,6 +402,9 @@ def load_classes(names_file_path: str) -> list:
 
     Arguments:
         names_file_path (str) : path of the names file of the dataset
+
+    Returns:
+        names (list): class labels for the detected objects
     """
     fp = open(names_file_path, "r")
     names = fp.read().split("\n")[:-1]

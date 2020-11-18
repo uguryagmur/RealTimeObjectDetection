@@ -19,8 +19,7 @@ class MaxPoolStride1(nn.Module):
 
     --------
     Attributes:
-        kernel_size (int, list) : kernel size of the max pooling layer
-        pad : same padding is used as default
+        kernel_size (int, list): kernel size of the max pooling layer
 
     --------
     Methods:
@@ -39,7 +38,7 @@ class MaxPoolStride1(nn.Module):
 
         --------
         Arguments:
-            x (torch.Tensor) : input tensor for the layer
+            x (torch.Tensor): input tensor for the layer
         """
         x = F.pad(x, (0, self.pad, 0, self.pad), mode="replicate")
         x = nn.MaxPool2d(self.kernel_size, self.pad)(x)
@@ -60,11 +59,12 @@ class DetectionLayer(nn.Module):
 
     --------
     Attributes:
-        anchors (list) : anchor boxes list given in the YOLO cfg file
+        anchors (list): anchor boxes list given in the YOLO cfg file
+        CUDA (bool): CUDA flag to enable GPU usage
 
     --------
     Methods:
-        forward(x, input_dim, num_classes, confidence) -> torch.Tensor :
+        forward(x, input_dim, num_classes, confidence) -> torch.Tensor:
             forward pass for detection layer function to detect the objects
             given in the classes with given confidence
     """
@@ -85,9 +85,9 @@ class DetectionLayer(nn.Module):
 
         --------
         Arguments:
-            x (torch.Tensor) : input tensor of the layer
-            inp_dim (list) : dimensions of the input file
-            num_classes (int) : number of the classes for object detection
+            x (torch.Tensor): input tensor of the layer
+            inp_dim (list): dimensions of the input file
+            num_classes (int): number of the classes for object detection
         """
         x = x.data
         prediction = x
@@ -101,11 +101,11 @@ class Upsample(nn.Module):
 
     --------
     Attributes:
-        stride (int) : stride of the upsampling layer (default=2)
+        stride (int): stride of the upsampling layer (default=2)
 
     --------
     Methods:
-        forward(x) -> torch.Tensor :
+        forward(x) -> torch.Tensor:
             forward pass of the Layer class for the given input tensor x
     """
 
@@ -119,7 +119,7 @@ class Upsample(nn.Module):
 
         --------
         Arguments:
-            x (torch.Tensor) : input tensor of the layer
+            x (torch.Tensor): input tensor of the layer
         """
         stride = self.stride
         assert(x.data.dim() == 4)
@@ -139,31 +139,34 @@ class Darknet(nn.Module):
 
     --------
     Attributes:
-        blocks (list) : darknet architecture block list obtained from cfg file
-        net_info (dict) : contains the network information given in cfg file
-        module_list (torch.nn.ModuleList) : list of the architecture blocks
-        header (torch.IntTensor) : contains the header info given in cfg file
-        seen (int) : images seen by the network
+        blocks (list): darknet architecture block list obtained from cfg file
+        net_info (dict): contains the network information given in cfg file
+        module_list (torch.nn.ModuleList): list of the architecture blocks
+        header (torch.IntTensor): contains the header info given in cfg file
+        seen (int): images seen by the network
 
     --------
     Methods:
-        get_blocks() -> list :
+        get_blocks() -> list:
             returns the Darknet architecture as a list of dictionary object
 
-        get_module_list() -> torch.nn.ModuleList :
+        get_module_list() -> torch.nn.ModuleList:
             returns the Darknet architecture as a torch.nn.ModuleList object
 
-        forward(x) -> detections (list) :
+        forward(x) -> detections (list):
             forward pass method of the Darknet architecture for input tensor x
 
-        load_weights(weight_file_path) :
+        train_mode() -> None:
+            train mode contextmanager function for the darknet
+
+        load_weights(weight_file_path):
             load pre-trained weights of the Darknet class
 
-        parse_cfg(cfg_file_path) -> blocks (list) :
+        parse_cfg(cfg_file_path) -> blocks (list):
             read the cfg file of the Darknet and returns the block list of
             the architecture of the Darknet network
 
-        create_modules(blocks) : -> net_info (dict),
+        create_modules(blocks): -> net_info (dict),
             module_list (torch.nn.ModuleList):
                 gets the architecture block list and converts it to the
                 torch.nn.ModuleList object to build network
@@ -174,7 +177,7 @@ class Darknet(nn.Module):
 
         --------
         Arguments:
-            cfg_file_path (string) : file path of the Darknet configure file
+            cfg_file_path (string): file path of the Darknet configure file
         """
         super(Darknet, self).__init__()
         self.blocks = self.parse_cfg(cfg_file_path)
@@ -197,7 +200,7 @@ class Darknet(nn.Module):
 
         --------
         Arguments:
-            x (torch.Tensor) : input tensor of the Darknet Class
+            x (torch.Tensor): input tensor of the Darknet Class
         """
         detections = []
         modules = self.blocks[1:]
@@ -216,9 +219,6 @@ class Darknet(nn.Module):
 
                 x = self.module_list[i](x)
                 outputs[i] = x
-                if module_type == 'convolutional' and\
-                   self.module_list[i][0].out_channels > 256:
-                    x = nn.Dropout(0.4)(x)
 
             # route layer
             elif module_type == "route":
@@ -291,6 +291,9 @@ class Darknet(nn.Module):
 
     @contextmanager
     def train_mode(self):
+        """
+            Activates the training mode for the darknet by using with phrase
+        """
         try:
             self.TRAIN = True
             yield
@@ -302,7 +305,7 @@ class Darknet(nn.Module):
 
         --------
         Arguments:
-            weight_file_path (str) : path of the binary weight file
+            weight_file_path (str): path of the binary weight file
         """
         # open the weights file
         fp = open(weight_file_path, "rb")
@@ -316,8 +319,6 @@ class Darknet(nn.Module):
         self.header = torch.from_numpy(header)
         self.seen = self.header[3]
 
-        # the rest of the values are the weights
-        # let's load them up
         weights = np.fromfile(fp, dtype=np.float32)
         fp.close()
 
@@ -402,7 +403,7 @@ class Darknet(nn.Module):
 
         --------
         Arguments:
-            cfg_file_path (str) : path of the cfg file
+            cfg_file_path (str): path of the cfg file
         """
 
         file = open(cfg_file_path, 'r')
@@ -438,7 +439,7 @@ class Darknet(nn.Module):
 
         --------
         Arguments:
-            blocks (list) : list of the dictionaries of the blocks
+            blocks (list): list of the dictionaries of the blocks
         """
         # captures the information about the input and pre-processing
         net_info = blocks[0]
