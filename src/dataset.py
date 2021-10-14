@@ -76,6 +76,15 @@ found.""".format(xml_directory, fformat))
         doc = ET.parse(filename).getroot()
         bboxes = []
 
+        self.fetch_boxes_from_xml(bboxes, doc)
+
+        if bboxes == []:
+            return None
+        else:
+            return bboxes
+
+    @staticmethod
+    def fetch_boxes_from_xml(bboxes, doc):
         for elem in doc.findall('object'):
 
             # because we want only person detections
@@ -85,12 +94,7 @@ found.""".format(xml_directory, fformat))
                                float(elem.find('bndbox/xmax').text),
                                float(elem.find('bndbox/ymax').text)])
 
-        if bboxes == []:
-            return None
-        else:
-            return bboxes
-
-    def __getitem__(self, i) -> torch.Tensor:
+    def __getitem__(self, i):
         r"""The function to get an item from the dataset
 
         Parameters:
@@ -102,25 +106,38 @@ found.""".format(xml_directory, fformat))
 
         assert isinstance(i, int)
         assert i < len(self.xml_path_list)
-        bbox = self.read_xml(self.xml_path_list[i])
-        img_path = self.data[self.xml_path_list[i]]
-        img = Image.open(img_path)
-        max_im_size = max(img.size)
-        w, h = img.size
-        ratio = float(self.resolution/max_im_size)
-        pad = [int((max_im_size - w)*ratio/2), int((max_im_size - h)*ratio/2)]
+        bbox, img = self.load_image(i)
+        pad, ratio = self.configure_image(img)
         if bbox is not None:
-            for b in bbox:
-                b.extend([1, 1])
-                b.extend([0]*79)
-            bbox = torch.tensor(bbox)
-            bbox = xyxy2xywh(bbox)
-            bbox[..., :4] *= ratio
-            bbox[:, 0] += pad[0]
-            bbox[:, 1] += pad[1]
+            bbox = self.configure_boun_box(bbox, pad, ratio)
         img = np.asarray(img)
         img = prep_image(img, self.resolution, mode='RGB').squeeze(0)
         return img, bbox
+
+    def configure_image(self, img):
+        max_im_size = max(img.size)
+        w, h = img.size
+        ratio = float(self.resolution / max_im_size)
+        pad = [int((max_im_size - w) * ratio / 2), int((max_im_size - h) * ratio / 2)]
+        return pad, ratio
+
+    def load_image(self, i):
+        bbox = self.read_xml(self.xml_path_list[i])
+        img_path = self.data[self.xml_path_list[i]]
+        img = Image.open(img_path)
+        return bbox, img
+
+    @staticmethod
+    def configure_boun_box(bbox, pad, ratio):
+        for b in bbox:
+            b.extend([1, 1])
+            b.extend([0] * 79)
+        bbox = torch.tensor(bbox)
+        bbox = xyxy2xywh(bbox)
+        bbox[..., :4] *= ratio
+        bbox[:, 0] += pad[0]
+        bbox[:, 1] += pad[1]
+        return bbox
 
     @staticmethod
     def collate_fn(batch):
@@ -242,37 +259,16 @@ class COCO(Dataset):
             torch.tensor: Given image data in a torch.tensor form
         """
 
-        id_ = self.img_ids[index]
-        img = self.img_dir + self.images[id_]['file_name']
-        img = Image.open(img).convert('RGB')
+        id_, img = self.fetch_image(index)
         if self.keep_img_name:
             img_name = self.images[id_]['file_name']
 
-        # obtaining the image size
-        w, h = img.size
-        max_im_size = max(w, h)
-        ratio = float(self.resolution/max_im_size)
-
-        # calculating paddings for bboxes
-        pad = [int((max_im_size - w)*ratio/2), int((max_im_size - h)*ratio/2)]
+        pad, ratio = self.configure_padding(img)
         if not self.only_gt:
             img = np.asarray(img)
             img = prep_image(img, self.resolution, mode='RGB').squeeze(0)
 
-        bbox = []
-        for annot in self.img_annotations:
-            if annot['image_id'] == id_:
-                cls_encoding = [1.0]
-                cls_encoding.extend([0]*80)
-                # print(obj['category_id'], self.coco2yolo(obj['category_id']))
-                cls_encoding[self.coco2yolo(annot['category_id'])] = 1.0
-                box = annot['bbox'][:5]
-                box.extend(cls_encoding)
-                box = torch.FloatTensor(box)
-                box[:4] *= ratio
-                box[0] += box[2]/2 + pad[0]
-                box[1] += box[3]/2 + pad[1]
-                bbox.append(box)
+        bbox = self.fetch_bounding_boxes(id_, pad, ratio)
 
         # draw_boxes(img, bbox, 'coco_val_with_box/'+img_name)
         if bbox != []:
@@ -288,6 +284,38 @@ class COCO(Dataset):
                 return img_name, img, bbox
             else:
                 return img_name, bbox
+
+    def fetch_bounding_boxes(self, id_, pad, ratio):
+        bbox = []
+        for annot in self.img_annotations:
+            if annot['image_id'] == id_:
+                cls_encoding = [1.0]
+                cls_encoding.extend([0] * 80)
+                # print(obj['category_id'], self.coco2yolo(obj['category_id']))
+                cls_encoding[self.coco2yolo(annot['category_id'])] = 1.0
+                box = annot['bbox'][:5]
+                box.extend(cls_encoding)
+                box = torch.FloatTensor(box)
+                box[:4] *= ratio
+                box[0] += box[2] / 2 + pad[0]
+                box[1] += box[3] / 2 + pad[1]
+                bbox.append(box)
+        return bbox
+
+    def configure_padding(self, img):
+        # obtaining the image size
+        w, h = img.size
+        max_im_size = max(w, h)
+        ratio = float(self.resolution / max_im_size)
+        # calculating paddings for bboxes
+        pad = [int((max_im_size - w) * ratio / 2), int((max_im_size - h) * ratio / 2)]
+        return pad, ratio
+
+    def fetch_image(self, index):
+        id_ = self.img_ids[index]
+        img = self.img_dir + self.images[id_]['file_name']
+        img = Image.open(img).convert('RGB')
+        return id_, img
 
     def collate_fn(self, batch):
         """
@@ -349,6 +377,7 @@ class COCO(Dataset):
 
 
 if __name__ == '__main__':
+    # dataset testing codes
     # for VOC dataset
     xml_dir = '/home/adm1n/Datasets/SPAutoencoder/\
 VOCdevkit/VOC2012/Annotations'
