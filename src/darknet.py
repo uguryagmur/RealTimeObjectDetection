@@ -1,6 +1,7 @@
 """Darknet Neural Network class"""
 
 from __future__ import division
+from _io import TextIOWrapper
 
 import torch
 import torch.nn as nn
@@ -202,63 +203,28 @@ class Darknet(nn.Module):
         Arguments:
             x (torch.Tensor): input tensor of the Darknet Class
         """
-        detections = []
-        modules = self.blocks[1:]
-        # we cache the outputs for the route layer
-        outputs = {}
-        write = 0
+        detections, modules, outputs, write = self.initialize_forward()
 
         # creating the modules with respect to the block information
         for i in range(len(modules)):
-
             module_type = (modules[i]["type"])
 
             # convolutional, upsample or maxpool layers
             if module_type == "convolutional" or module_type \
                     == "upsample" or module_type == "maxpool":
-
-                x = self.module_list[i](x)
-                outputs[i] = x
+                x = self.pass_through_convolution(i, outputs, x)
 
             # route layer
             elif module_type == "route":
-                layers = modules[i]["layers"]
-                layers = [int(a) for a in layers]
-
-                if (layers[0]) > 0:
-                    layers[0] = layers[0] - i
-
-                # layers argument has one value, no concatenation
-                if len(layers) == 1:
-                    x = outputs[i + (layers[0])]
-
-                # layers argument has two values, concatenation
-                else:
-                    if (layers[1]) > 0:
-                        layers[1] = layers[1] - i
-
-                    map1 = outputs[i + layers[0]]
-                    map2 = outputs[i + layers[1]]
-
-                    x = torch.cat((map1, map2), 1)
-                outputs[i] = x
+                x = self.pass_through_route(i, modules, outputs, x)
 
             # shortcut layer
             elif module_type == "shortcut":
-                from_ = int(modules[i]["from"])
-                x = outputs[i-1] + outputs[i+from_]
-                outputs[i] = x
+                x = self.pass_through_shortcut(i, modules, outputs, x)
 
             # detection layer
             elif module_type == 'yolo':
-
-                anchors = self.module_list[i][0].anchors
-
-                # get the input dimensions
-                inp_dim = int(self.net_info["height"])
-
-                # get the number of classes
-                self.num_classes = int(modules[i]["classes"])
+                anchors, inp_dim = self.pass_through_detection(i, modules)
 
                 # output the result
                 global CUDA
@@ -267,15 +233,12 @@ class Darknet(nn.Module):
                                       self.num_classes,
                                       self.CUDA,
                                       TRAIN=self.TRAIN)
-
                 if type(x.data) == int:
                     continue
-
                 if not write:
                     self.anchors = anchors.copy()
                     detections = x
                     write = 1
-
                 else:
                     self.anchors.extend(anchors)
                     detections = torch.cat((detections, x), 1)
@@ -288,6 +251,56 @@ class Darknet(nn.Module):
             return detections
         except NameError:
             return 0
+
+    def pass_through_detection(self, i, modules):
+        anchors = self.module_list[i][0].anchors
+        # get the input dimensions
+        inp_dim = int(self.net_info["height"])
+        # get the number of classes
+        self.num_classes = int(modules[i]["classes"])
+        return anchors, inp_dim
+
+    @staticmethod
+    def pass_through_shortcut(i, modules, outputs, x):
+        from_ = int(modules[i]["from"])
+        x = outputs[i - 1] + outputs[i + from_]
+        outputs[i] = x
+        return x
+
+    @staticmethod
+    def pass_through_route(i, modules, outputs, x):
+        layers = modules[i]["layers"]
+        layers = [int(a) for a in layers]
+        if (layers[0]) > 0:
+            layers[0] = layers[0] - i
+        # layers argument has one value, no concatenation
+        if len(layers) == 1:
+            x = outputs[i + (layers[0])]
+
+        # layers argument has two values, concatenation
+        else:
+            if (layers[1]) > 0:
+                layers[1] = layers[1] - i
+
+            map1 = outputs[i + layers[0]]
+            map2 = outputs[i + layers[1]]
+
+            x = torch.cat((map1, map2), 1)
+        outputs[i] = x
+        return x
+
+    def pass_through_convolution(self, i, outputs, x):
+        x = self.module_list[i](x)
+        outputs[i] = x
+        return x
+
+    def initialize_forward(self):
+        detections = []
+        modules = self.blocks[1:]
+        # we cache the outputs for the route layer
+        outputs = {}
+        write = 0
+        return detections, modules, outputs, write
 
     @contextmanager
     def train_mode(self):
@@ -307,9 +320,83 @@ class Darknet(nn.Module):
         Arguments:
             weight_file_path (str): path of the binary weight file
         """
+        weights = self.configure_weights(weight_file_path)
+        ptr = 0
+        for i in range(len(self.module_list)):
+            module_type = self.blocks[i + 1]["type"]
+            if module_type == "convolutional":
+                model = self.module_list[i]
+                try:
+                    batch_normalize = int(self.blocks[i+1]["batch_normalize"])
+                except KeyError:
+                    batch_normalize = 0
+                conv = model[0]
+                if batch_normalize:
+                    ptr = self.configure_conv_weights_with_batch_norm(model, ptr, weights)
+                else:
+                    ptr = self.configure_conv_weights_without_batch_norm(conv, ptr, weights)
+
+                # let us load the weights for the Convolutional layers
+                ptr = self.configure_conv_weights(conv, ptr, weights)
+
+    @staticmethod
+    def configure_conv_weights(conv, ptr, weights):
+        num_weights = conv.weight.numel()
+        # do the same as above for weights
+        conv_weights = torch.from_numpy(weights[ptr:ptr + num_weights])
+        ptr = ptr + num_weights
+        conv_weights = conv_weights.view_as(conv.weight.data)
+        conv.weight.data.copy_(conv_weights)
+        return ptr
+
+    @staticmethod
+    def configure_conv_weights_without_batch_norm(conv, ptr, weights):
+        # number of biases
+        num_biases = conv.bias.numel()
+        # load the weights
+        conv_biases = torch.from_numpy(
+            weights[ptr: ptr + num_biases])
+        ptr = ptr + num_biases
+        # reshape the loaded weights according to the dims of
+        # the model weights
+        conv_biases = conv_biases.view_as(conv.bias.data)
+        # finally copy the data
+        conv.bias.data.copy_(conv_biases)
+        return ptr
+
+    @staticmethod
+    def configure_conv_weights_with_batch_norm(model, ptr, weights):
+        bn = model[1]
+        # get the number of weights of Batch Norm Layer
+        num_bn_biases = bn.bias.numel()
+        # load the weights
+        bn_biases = torch.from_numpy(
+            weights[ptr:ptr + num_bn_biases])
+        ptr += num_bn_biases
+        bn_weights = torch.from_numpy(
+            weights[ptr: ptr + num_bn_biases])
+        ptr += num_bn_biases
+        bn_running_mean = torch.from_numpy(
+            weights[ptr: ptr + num_bn_biases])
+        ptr += num_bn_biases
+        bn_running_var = torch.from_numpy(
+            weights[ptr: ptr + num_bn_biases])
+        ptr += num_bn_biases
+        # cast the loaded weights into dims of model weights.
+        bn_biases = bn_biases.view_as(bn.bias.data)
+        bn_weights = bn_weights.view_as(bn.weight.data)
+        bn_running_mean = bn_running_mean.view_as(bn.running_mean)
+        bn_running_var = bn_running_var.view_as(bn.running_var)
+        # copy the data to model
+        bn.bias.data.copy_(bn_biases)
+        bn.weight.data.copy_(bn_weights)
+        bn.running_mean.copy_(bn_running_mean)
+        bn.running_var.copy_(bn_running_var)
+        return ptr
+
+    def configure_weights(self, weight_file_path):
         # open the weights file
         fp = open(weight_file_path, "rb")
-
         # the first 4 values are header information
         # 1. major version number
         # 2. minor Version Number
@@ -318,83 +405,9 @@ class Darknet(nn.Module):
         header = np.fromfile(fp, dtype=np.int32, count=5)
         self.header = torch.from_numpy(header)
         self.seen = self.header[3]
-
         weights = np.fromfile(fp, dtype=np.float32)
         fp.close()
-
-        ptr = 0
-        for i in range(len(self.module_list)):
-            module_type = self.blocks[i + 1]["type"]
-
-            if module_type == "convolutional":
-                model = self.module_list[i]
-                try:
-                    batch_normalize = int(self.blocks[i+1]["batch_normalize"])
-                except KeyError:
-                    batch_normalize = 0
-
-                conv = model[0]
-
-                if (batch_normalize):
-                    bn = model[1]
-
-                    # get the number of weights of Batch Norm Layer
-                    num_bn_biases = bn.bias.numel()
-
-                    # load the weights
-                    bn_biases = torch.from_numpy(
-                        weights[ptr:ptr + num_bn_biases])
-                    ptr += num_bn_biases
-
-                    bn_weights = torch.from_numpy(
-                        weights[ptr: ptr + num_bn_biases])
-                    ptr += num_bn_biases
-
-                    bn_running_mean = torch.from_numpy(
-                        weights[ptr: ptr + num_bn_biases])
-                    ptr += num_bn_biases
-
-                    bn_running_var = torch.from_numpy(
-                        weights[ptr: ptr + num_bn_biases])
-                    ptr += num_bn_biases
-
-                    # cast the loaded weights into dims of model weights.
-                    bn_biases = bn_biases.view_as(bn.bias.data)
-                    bn_weights = bn_weights.view_as(bn.weight.data)
-                    bn_running_mean = bn_running_mean.view_as(bn.running_mean)
-                    bn_running_var = bn_running_var.view_as(bn.running_var)
-
-                    # copy the data to model
-                    bn.bias.data.copy_(bn_biases)
-                    bn.weight.data.copy_(bn_weights)
-                    bn.running_mean.copy_(bn_running_mean)
-                    bn.running_var.copy_(bn_running_var)
-
-                else:
-                    # number of biases
-                    num_biases = conv.bias.numel()
-
-                    # load the weights
-                    conv_biases = torch.from_numpy(
-                        weights[ptr: ptr + num_biases])
-                    ptr = ptr + num_biases
-
-                    # reshape the loaded weights according to the dims of
-                    # the model weights
-                    conv_biases = conv_biases.view_as(conv.bias.data)
-
-                    # finally copy the data
-                    conv.bias.data.copy_(conv_biases)
-
-                # let us load the weights for the Convolutional layers
-                num_weights = conv.weight.numel()
-
-                # do the same as above for weights
-                conv_weights = torch.from_numpy(weights[ptr:ptr+num_weights])
-                ptr = ptr + num_weights
-
-                conv_weights = conv_weights.view_as(conv.weight.data)
-                conv.weight.data.copy_(conv_weights)
+        return weights
 
     @staticmethod
     def parse_cfg(cfg_file_path):
@@ -405,33 +418,33 @@ class Darknet(nn.Module):
         Arguments:
             cfg_file_path (str): path of the cfg file
         """
-
         file = open(cfg_file_path, 'r')
-        # store the lines in a list
-        lines = file.read().split('\n')
-        # get read of the empty lines
-        lines = [x for x in lines if len(x) > 0]
-        # get rid of comments
-        lines = [x for x in lines if x[0] != '#']
-        # get rid of fringe whitespaces
-        lines = [x.rstrip().lstrip() for x in lines]
-
+        lines = Darknet.configure_cfg_file(file)
         block = {}
         blocks = []
+        Darknet.parse_cfg_line_by_line(block, blocks, lines)
+        return blocks
 
+    @staticmethod
+    def configure_cfg_file(file: TextIOWrapper):
+        lines = file.read().split('\n')
+        lines = [x for x in lines if len(x) > 0]
+        lines = [x for x in lines if x[0] != '#']
+        lines = [x.rstrip().lstrip() for x in lines]
+        return lines
+
+    @staticmethod
+    def parse_cfg_line_by_line(block, blocks, lines):
         for line in lines:
             if line[0] == "[":
-
                 if len(block) != 0:
-                    blocks.append(block)     # add it the blocks list
-                    block = {}               # re-init the block
+                    blocks.append(block)  # add it the blocks list
+                    block = {}  # re-init the block
                 block["type"] = line[1:-1].rstrip()
             else:
                 key, value = line.split("=")
                 block[key.rstrip()] = value.lstrip()
         blocks.append(block)
-
-        return blocks
 
     @staticmethod
     def create_modules(blocks):
@@ -442,16 +455,7 @@ class Darknet(nn.Module):
             blocks (list): list of the dictionaries of the blocks
         """
         # captures the information about the input and pre-processing
-        net_info = blocks[0]
-
-        module_list = nn.ModuleList()
-
-        # indexing blocks helps with implementing route layers
-        index = 0
-
-        prev_filters = 3
-
-        output_filters = []
+        index, module_list, net_info, output_filters, prev_filters = Darknet.initialize_blocks(blocks)
 
         for block in blocks:
             module = nn.Sequential()
@@ -500,73 +504,25 @@ class Darknet(nn.Module):
             # we use Bilinear2dUpsampling
 
             elif (block["type"] == "upsample"):
-                stride = int(block["stride"])
-                # upsample = Upsample(stride)
-                upsample = nn.Upsample(scale_factor=2, mode="bilinear",
-                                       align_corners=False)
-                module.add_module("upsample_{}".format(index), upsample)
+                Darknet.create_upsample_block(block, index, module)
 
             # if it is a route layer
             elif (block["type"] == "route"):
-                block["layers"] = block["layers"].split(',')
-
-                # start  of a route
-                start = int(block["layers"][0])
-
-                # end, if there exists one.
-                try:
-                    end = int(block["layers"][1])
-                except IndexError:
-                    end = 0
-
-                # positive anotation
-                if start > 0:
-                    start = start - index
-
-                if end > 0:
-                    end = end - index
-
-                route = EmptyLayer()
-                module.add_module("route_{0}".format(index), route)
-
-                if end < 0:
-                    filters = output_filters[index +
-                                             start] +\
-                        output_filters[index + end]
-                else:
-                    filters = output_filters[index + start]
+                filters = Darknet.create_route_block(block, filters, index, module, output_filters)
 
             # shortcut corresponds to skip connection
             elif block["type"] == "shortcut":
-                shortcut = EmptyLayer()
-                module.add_module("shortcut_{}".format(index), shortcut)
+                Darknet.create_shortcut_block(index, module)
 
             elif block["type"] == "maxpool":
-                stride = int(block["stride"])
-                size = int(block["size"])
-                if stride != 1:
-                    maxpool = nn.MaxPool2d(size, stride)
-                else:
-                    maxpool = MaxPoolStride1(size)
-
-                module.add_module("maxpool_{}".format(index), maxpool)
+                Darknet.create_maxpool_block(block, index, module)
 
             # YOLO is the detection layer
             elif block["type"] == "yolo":
-                mask = block["mask"].split(",")
-                mask = [int(x) for x in mask]
-
-                anchors = block["anchors"].split(",")
-                anchors = [int(a) for a in anchors]
-                anchors = [(anchors[i], anchors[i+1])
-                           for i in range(0, len(anchors), 2)]
-                anchors = [anchors[i] for i in mask]
-
-                detection = DetectionLayer(anchors)
-                module.add_module("Detection_{}".format(index), detection)
+                Darknet.create_yolo_block(block, index, module)
 
             else:
-                print("Something I dunno")
+                print("Unknown block error: A unknown block is provided")
                 assert False
 
             module_list.append(module)
@@ -574,4 +530,74 @@ class Darknet(nn.Module):
             output_filters.append(filters)
             index += 1
 
-        return (net_info, module_list)
+        return net_info, module_list
+
+    @staticmethod
+    def create_yolo_block(block, index, module):
+        mask = block["mask"].split(",")
+        mask = [int(x) for x in mask]
+        anchors = block["anchors"].split(",")
+        anchors = [int(a) for a in anchors]
+        anchors = [(anchors[i], anchors[i + 1])
+                   for i in range(0, len(anchors), 2)]
+        anchors = [anchors[i] for i in mask]
+        detection = DetectionLayer(anchors)
+        module.add_module("Detection_{}".format(index), detection)
+
+    @staticmethod
+    def create_maxpool_block(block, index, module):
+        stride = int(block["stride"])
+        size = int(block["size"])
+        if stride != 1:
+            maxpool = nn.MaxPool2d(size, stride)
+        else:
+            maxpool = MaxPoolStride1(size)
+        module.add_module("maxpool_{}".format(index), maxpool)
+
+    @staticmethod
+    def create_shortcut_block(index, module):
+        shortcut = EmptyLayer()
+        module.add_module("shortcut_{}".format(index), shortcut)
+
+    @staticmethod
+    def create_route_block(block, filters, index, module, output_filters):
+        block["layers"] = block["layers"].split(',')
+        # start  of a route
+        start = int(block["layers"][0])
+        # end, if there exists one.
+        try:
+            end = int(block["layers"][1])
+        except IndexError:
+            end = 0
+        # positive anotation
+        if start > 0:
+            start = start - index
+        if end > 0:
+            end = end - index
+        route = EmptyLayer()
+        module.add_module("route_{0}".format(index), route)
+        if end < 0:
+            filters = output_filters[index +
+                                     start] + \
+                      output_filters[index + end]
+        else:
+            filters = output_filters[index + start]
+        return filters
+
+    @staticmethod
+    def create_upsample_block(block, index, module):
+        stride = int(block["stride"])
+        # upsample = Upsample(stride)
+        upsample = nn.Upsample(scale_factor=2, mode="bilinear",
+                               align_corners=False)
+        module.add_module("upsample_{}".format(index), upsample)
+
+    @staticmethod
+    def initialize_blocks(blocks):
+        net_info = blocks[0]
+        module_list = nn.ModuleList()
+        # indexing blocks helps with implementing route layers
+        index = 0
+        prev_filters = 3
+        output_filters = []
+        return index, module_list, net_info, output_filters, prev_filters

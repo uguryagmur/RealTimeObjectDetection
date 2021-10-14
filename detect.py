@@ -59,8 +59,8 @@ def box_write(tensor, results) -> np.ndarray:
         tensor (torch.Tensor) : output results of the Darknet detection
         results (torch.Tensor) : loaded images tensor with a certain batch
     """
-    c_1 = tuple(tensor[1:3].int())
-    c_2 = tuple(tensor[3:5].int())
+    c_1 = (tensor[1].int().item(), tensor[2].int().item())
+    c_2 = (tensor[3].int().item(), tensor[4].int().item())
     img = results[int(tensor[0])]
     cls = int(tensor[-1])
     color = random.choice(colors)

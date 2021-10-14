@@ -128,5 +128,8 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-#wights
+#weights
 weights/*.weights
+
+#unnecessary folders
+.idea/
