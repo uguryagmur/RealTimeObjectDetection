@@ -12,7 +12,6 @@ import pickle as pkl
 import os.path as osp
 import torch.nn as nn
 from src.darknet import Darknet
-from torch.autograd import Variable
 from src.util import load_classes, prep_image, write_results
 
 
@@ -54,119 +53,122 @@ class DarknetDetector:
 
         for i, batch_data in enumerate(batch_gen):
             print('BATCH NUMBER: ', i)
-            batch_list = batch_data[0]
-            im_batches = batch_data[1][0]
-            im_dim_list = batch_data[2]
-            loaded_ims = batch_data[3]
-            write = 0
-            prediction = torch.zeros(1)
-            if self.CUDA:
-                im_batches = im_batches.cuda()
-                im_dim_list = im_dim_list.cuda()
+            batch_list, im_batches, im_dim_list, loaded_ims, write = self.initialize_batch(batch_data)
             start = time.time()
             with torch.no_grad():
-                prediction = model(Variable(im_batches))
+                prediction = model(im_batches)
 
             prediction = write_results(prediction,
                                        self.num_classes,
                                        confidence=self.confidence,
                                        nms_conf=self.nms_thresh)
-
-            print(prediction)
-            print(im_dim_list)
             end = time.time()
-
             if type(prediction) == int:
-
-                for im_num, image in enumerate(batch_list):
-                    # im_id = i*batch_size + im_num
-                    print("{0:20s} predicted in {1:6.3f} seconds".format(
-                        image.split("/")[-1], (end - start) / self.batch_size))
-                    print("{0:20s} {1:s}".format("Objects Detected:", ""))
-                    print("----------------o----------------")
-
-                self.metrics[img_name_list[i]] = prediction
+                self.process_no_detection(batch_list, end, i, img_name_list, prediction, start)
                 continue
 
-            # transform the attribute from index in batch to index in imlist
-            prediction[:, 0] += i * self.batch_size
-            output = None
+            output = self.transform_from_batch_to_imlist(i, prediction)
+            output = self.update_output(output, prediction, write)
+            self.process_output(batch_list, end, i, im_dim_list, img_name_list, img_path_list, loaded_ims, output,
+                                prediction, start)
 
-            if not write:  # If we haven't initialised output
-                output = prediction
-                write = 1
-            else:
-                output = torch.cat((output, prediction))
+        self.save_detection_metrics()
+        torch.cuda.empty_cache()
 
-            for im_num, image in enumerate(batch_list):
-                # im_id = i*batch_size + im_num
-                objs = [self.classes[int(x[-1])] for x in output]
-                print("{0:20s} predicted in {1:6.3f} seconds".format(
-                    image.split("/")[-1], (end - start) / self.batch_size))
-                print("{0:20s} {1:s}".format("Objects Detected:", " ".join(objs)))
-                print("----------------o----------------")
+    def process_output(self, batch_list, end, i, im_dim_list, img_name_list, img_path_list, loaded_ims, output,
+                       prediction, start):
+        for im_num, image in enumerate(batch_list):
+            self.process_detected_objects(end, i, image, img_name_list, output, prediction, start)
+        if self.CUDA:
+            torch.cuda.synchronize()
+        if output is None:
+            print("No detections were made")
+            exit()
+        self.draw_object_boxes_on_img(i, im_dim_list, img_path_list, loaded_ims, output)
 
-                # writing the metrics for each file and each class
-                text = ""
-                for x in output:
-                    bbox_text = "\t\tBounding Box: {}\n".format(
-                        (torch.round(x)[1:5].tolist()))
-                    text += ''.join(["\tObject:\n"
-                                     "\t\tClass: {}\n".format(self.classes[int(x[-1])]),
-                                     bbox_text,
-                                     "\t\tObjectness: {:.4f}\n".format(x[-3]),
-                                     "\t\tClass Conf.: {:.4f}\n".format(x[-2])])
-                self.metrics[img_name_list[i]] = prediction.tolist()
+    def update_output(self, output, prediction, write):
+        if not write:
+            output = prediction
+            write = 1
+        else:
+            output = torch.cat((output, prediction))
+        return output
 
-            if self.CUDA:
-                torch.cuda.synchronize()
+    def transform_from_batch_to_imlist(self, i, prediction):
+        prediction[:, 0] += i * self.batch_size
 
-            if output is None:
-                print("No detections were made")
-                exit()
-
-            output[:, 0] = output[:, 0] - i
-            im_dim_list = torch.index_select(im_dim_list, 0, output[:, 0].long())
-
-            scaling_factor = torch.min(416 / im_dim_list, 1)[0].view(-1, 1)
-
-            output[:, [1, 3]] -= (self.inp_dim - scaling_factor
-                                  * im_dim_list[:, 0].view(-1, 1)) / 2
-            output[:, [2, 4]] -= (self.inp_dim - scaling_factor
-                                  * im_dim_list[:, 1].view(-1, 1)) / 2
-
-            output[:, 1:5] /= scaling_factor
-
-            for j in range(output.shape[0]):
-                output[j, [1, 3]] = torch.clamp(output[j, [1, 3]],
-                                                0.0, im_dim_list[j, 0])
-                output[j, [2, 4]] = torch.clamp(output[j, [2, 4]],
-                                                0.0, im_dim_list[j, 1])
-
-            output_recast = time.time()
-            class_load = time.time()
-            self.colors = pkl.load(open("weights/pallete", "rb"))
-
-            draw = time.time()
-
-            list(map(lambda x: self.box_write(x, loaded_ims), output))
-
-            det_names = pd.Series(img_path_list[i]).apply(
-                lambda x: "{}/det_{}_{}".format(self.args.det,
-                                                self.args.cfg_file[4:-4],
-                                                x.split("/")[-1]))
-
-            list(map(cv2.imwrite, det_names, loaded_ims))
-
-        end = time.time()
-
-        # writing the metrics to file
-        metrics_file = self.args.det + '/metrics.yaml'
-        with open('metrics.json', 'w') as file:
+    def save_detection_metrics(self):
+        metrics_file = self.args.det + '/metrics.json'
+        with open(metrics_file, 'w') as file:
             json.dump(self.metrics, file)
 
-        # empty cuda cash
-        torch.cuda.empty_cache()
+    def draw_object_boxes_on_img(self, i, im_dim_list, img_path_list, loaded_ims, output):
+        im_dim_list = self.convert_box_dims_to_original_image(i, im_dim_list, output)
+        self.clamp_box_dims(im_dim_list, output)
+        self.colors = pkl.load(open("weights/pallete", "rb"))
+        list(map(lambda x: self.box_write(x, loaded_ims), output))
+        det_names = pd.Series(img_path_list[i]).apply(
+            lambda x: "{}/det_{}_{}".format(self.args.det,
+                                            self.args.cfg_file[4:-4],
+                                            x.split("/")[-1]))
+        list(map(cv2.imwrite, det_names, loaded_ims))
+
+    def clamp_box_dims(self, im_dim_list, output):
+        for j in range(output.shape[0]):
+            output[j, [1, 3]] = torch.clamp(output[j, [1, 3]],
+                                            0.0, im_dim_list[j, 0])
+            output[j, [2, 4]] = torch.clamp(output[j, [2, 4]],
+                                            0.0, im_dim_list[j, 1])
+
+    def convert_box_dims_to_original_image(self, i, im_dim_list, output):
+        output[:, 0] = output[:, 0] - i
+        im_dim_list = torch.index_select(im_dim_list, 0, output[:, 0].long())
+        scaling_factor = torch.min(416 / im_dim_list, 1)[0].view(-1, 1)
+        output[:, [1, 3]] -= (self.inp_dim - scaling_factor
+                              * im_dim_list[:, 0].view(-1, 1)) / 2
+        output[:, [2, 4]] -= (self.inp_dim - scaling_factor
+                              * im_dim_list[:, 1].view(-1, 1)) / 2
+        output[:, 1:5] /= scaling_factor
+        return im_dim_list
+
+    def process_detected_objects(self, end, i, image, img_name_list, output, prediction, start):
+        # im_id = i*batch_size + im_num
+        objs = [self.classes[int(x[-1])] for x in output]
+        print("{0:20s} predicted in {1:6.3f} seconds".format(
+            image.split("/")[-1], (end - start) / self.batch_size))
+        print("{0:20s} {1:s}".format("Objects Detected:", " ".join(objs)))
+        print("----------------o----------------")
+        # writing the metrics for each file and each class
+        text = ""
+        for x in output:
+            bbox_text = "\t\tBounding Box: {}\n".format(
+                (torch.round(x)[1:5].tolist()))
+            text += ''.join(["\tObject:\n"
+                             "\t\tClass: {}\n".format(self.classes[int(x[-1])]),
+                             bbox_text,
+                             "\t\tObjectness: {:.4f}\n".format(x[-3]),
+                             "\t\tClass Conf.: {:.4f}\n".format(x[-2])])
+        self.metrics[img_name_list[i]] = prediction.tolist()
+
+    def process_no_detection(self, batch_list, end, i, img_name_list, prediction, start):
+        for im_num, image in enumerate(batch_list):
+            # im_id = i*batch_size + im_num
+            print("{0:20s} predicted in {1:6.3f} seconds".format(
+                image.split("/")[-1], (end - start) / self.batch_size))
+            print("{0:20s} {1:s}".format("Objects Detected:", ""))
+            print("----------------o----------------")
+        self.metrics[img_name_list[i]] = prediction
+
+    def initialize_batch(self, batch_data):
+        batch_list = batch_data[0]
+        im_batches = batch_data[1][0]
+        im_dim_list = batch_data[2]
+        loaded_ims = batch_data[3]
+        write = 0
+        if self.CUDA:
+            im_batches = im_batches.cuda()
+            im_dim_list = im_dim_list.cuda()
+        return batch_list, im_batches, im_dim_list, loaded_ims, write
 
     def use_model_parallelism(self, model):
         # parallel computing adjustment
