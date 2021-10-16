@@ -6,12 +6,12 @@ import argparse
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
-from validate import DarknetValidator
+from test import DarknetValidator
 from src.dataset import COCO, VOC
 from src.darknet import Darknet
 from src.util import xywh2YOLO, bbox_iou_wh
 
-torch.manual_seed(0)
+torch.manual_seed(42)
 
 
 class DarknetTrainer:

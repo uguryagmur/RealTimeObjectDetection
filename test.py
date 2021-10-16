@@ -7,7 +7,7 @@ from src.darknet import Darknet
 from src.dataset import COCO
 from src.util import bbox_iou, write_results, xywh2xyxy
 
-torch.manual_seed(7)
+torch.manual_seed(42)
 
 
 class DarknetValidator:
@@ -116,18 +116,14 @@ class DarknetValidator:
         box_ious = []
         row = []
         true_positive = 0
-        for box in pred:
-            for t_box in target:
-                iou = bbox_iou(box[1:5].cpu(), t_box[0:4].cpu())
-                if iou.item() > threshold:
-                    row.append(iou.item())
-                else:
-                    row.append(0.0)
-            box_ious.append(row.copy())
-            row.clear()
+        box_ious = self.create_iou_matrix_for_predictions_and_targets(box_ious, pred, row, target, threshold)
 
-        box_ious = torch.FloatTensor(box_ious)
+        true_positive = self.evaluate_iou_matrix(box_ious, pred, true_positive)
 
+        return true_positive
+
+    @staticmethod
+    def evaluate_iou_matrix(self, box_ious, pred, true_positive):
         # if there is an anormal change on pred tensor problem might be there
         for i in range(pred.size(0)):
             if torch.max(box_ious).item() == 0:
@@ -138,8 +134,21 @@ class DarknetValidator:
             box_ious[:, max_ind[ind]] = torch.zeros(
                 box_ious[:, max_ind[ind]].size())
             true_positive += 1
-
         return true_positive
+
+    @staticmethod
+    def create_iou_matrix_for_predictions_and_targets(self, box_ious, pred, row, target, threshold):
+        for box in pred:
+            for t_box in target:
+                iou = bbox_iou(box[1:5].cpu(), t_box[0:4].cpu())
+                if iou.item() > threshold:
+                    row.append(iou.item())
+                else:
+                    row.append(0.0)
+            box_ious.append(row.copy())
+            row.clear()
+        box_ious = torch.FloatTensor(box_ious)
+        return box_ious
 
     def save_img_scores_(self, img_name, people_num, tp, fp, fn):
         """Function to save validation scores for each image

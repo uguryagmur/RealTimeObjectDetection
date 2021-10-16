@@ -16,31 +16,31 @@ from src.util import load_classes, prep_image, write_results
 
 
 class DarknetDetector:
-    def __init__(self):
+    def __init__(self, images: str, destination: str, cfg_path: str, weights_path: str, resolution: int,
+                 confidence: float, nms_thresh: float, CUDA: bool, TORCH: bool):
         # configuration of argument metrics
-        self.args = arg_parse()
-        self.parse_arguments(self.args)
-        assert type(self.CUDA) == bool
+        self.images = images
+        self.batch_size = 1
+        self.confidence = confidence
+        self.nms_thresh = nms_thresh
+        self.destination = destination
+        self.cfg_path = cfg_path
+        self.weights_path = weights_path
+        self.reso = resolution
+        self.CUDA = CUDA
+        self.TORCH = TORCH
         self.metrics = {}
         self.num_classes = 80
         self.classes = load_classes("data/coco.names")
-
-    def parse_arguments(self, args):
-        self.images = args.images
-        self.batch_size = int(args.bs)
-        self.confidence = float(args.confidence)
-        self.nms_thresh = float(args.nms_thresh)
-        self.CUDA = args.CUDA
-        self.TORCH = args.TORCH
 
     def __call__(self, *args, **kwargs):
         model = self.configure_darknet()
 
         # if the destination path doesn't exist
-        if not os.path.exists(self.args.det):
-            os.makedirs(self.args.det)
+        if not os.path.exists(self.destination):
+            os.makedirs(self.destination)
 
-        model.net_info["height"] = self.args.reso
+        model.net_info["height"] = self.reso
         self.inp_dim = int(model.net_info["height"])
 
         # input dimension check
@@ -98,7 +98,7 @@ class DarknetDetector:
         prediction[:, 0] += i * self.batch_size
 
     def save_detection_metrics(self):
-        metrics_file = self.args.det + '/metrics.json'
+        metrics_file = self.destination + '/metrics.json'
         with open(metrics_file, 'w') as file:
             json.dump(self.metrics, file)
 
@@ -108,8 +108,8 @@ class DarknetDetector:
         self.colors = pkl.load(open("weights/pallete", "rb"))
         list(map(lambda x: self.box_write(x, loaded_ims), output))
         det_names = pd.Series(img_path_list[i]).apply(
-            lambda x: "{}/det_{}_{}".format(self.args.det,
-                                            self.args.cfg_file[4:-4],
+            lambda x: "{}/det_{}_{}".format(self.destination,
+                                            self.cfg_path[4:-4],
                                             x.split("/")[-1]))
         list(map(cv2.imwrite, det_names, loaded_ims))
 
@@ -180,11 +180,11 @@ class DarknetDetector:
 
     def configure_darknet(self):
         print("Loading network.....")
-        model = Darknet(self.args.cfg_file, self.CUDA)
+        model = Darknet(self.cfg_path, self.CUDA)
         if self.TORCH:
-            model.load_state_dict(torch.load(self.args.weights_file))
+            model.load_state_dict(torch.load(self.weights_path))
         else:
-            model.load_weights(self.args.weights_file)
+            model.load_weights(self.weights_path)
         print("Network successfully loaded")
         model = self.use_model_parallelism(model)
         return model
@@ -284,5 +284,17 @@ def arg_parse():
 
 
 if __name__ == '__main__':
-    detector = DarknetDetector()
+    params = arg_parse()
+    detector_params = {
+        "images": params.images,
+        "destination": params.det,
+        "cfg_path": params.cfg_file,
+        "weights_path": params.weights_file,
+        "resolution": params.reso,
+        "confidence": params.confidence,
+        "nms_thresh": params.nms_thresh,
+        "CUDA": params.CUDA,
+        "TORCH": params.TORCH,
+    }
+    detector = DarknetDetector(**detector_params)
     detector()
