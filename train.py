@@ -237,7 +237,7 @@ class DarknetTrainer:
             img_dir (str): path of the folder containing validation images
         """
         self.validator = DarknetValidator(annotation_dir,
-                                          img_dir, confidence=0.6)
+                                          img_dir, confidence=self.confidence)
 
     @staticmethod
     def progress_bar(curr_epoch, epoch_num, curr_batch, batch_num, loss):
@@ -480,27 +480,26 @@ VOCdevkit/VOC2012/Annotations'
     return parser.parse_args()
 
 
-annot_dir = '/home/adm1n/Datasets/COCO/2017/annotations\
-/instances_val2017.json'
-img_dir = '/home/adm1n/Datasets/COCO/2017/val2017/'
-
 if __name__ == '__main__':
-    args = arg_parse()
-    xml_dir = args.xml
-    img_dir = args.images
-    batch_size = int(args.bs)
-    epoch_number = int(args.epoch)
-    confidence = float(args.conf)
-    cfg = args.cfg_file
-    weights = args.weights_file
-    reso = int(args.reso)
-    CUDA = args.CUDA
-    TUNE = args.TUNE
-    assert type(CUDA) == bool
-    trainer = DarknetTrainer(cfg, weights,
-                             epoch=epoch_number,
-                             batch_size=batch_size,
-                             resolution=reso, confidence=confidence,
-                             CUDA=CUDA, TUNE=TUNE)
-    trainer.get_validator(annot_dir, img_dir)
-    trainer.train(xml_dir, img_dir)
+    params = arg_parse()
+    trainer_params = {
+        "cfg_file": params.cfg_file,
+        "weights_file": params.weights_file,
+        "epoch": params.epoch,
+        "batch_size": params.bs,
+        "resolution": params.reso,
+        "confidence": params.conf,
+        "CUDA": params.CUDA,
+        "TUNE": params.TUNE,
+    }
+    validator_params = {
+        "annotation_dir": '/home/adm1n/Datasets/COCO/2017/annotations/instances_val2017.json',
+        "img_dir": '/home/adm1n/Datasets/COCO/2017/val2017/',
+    }
+    train_params = {
+        "annotation_dir": params.xml,
+        "img_dir": params.images,
+    }
+    trainer = DarknetTrainer(**trainer_params)
+    trainer.get_validator(**validator_params)
+    trainer.train(**train_params)
