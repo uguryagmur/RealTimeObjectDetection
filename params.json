@@ -1,0 +1,27 @@
+{
+  "detector_params": {
+    "images_path": "imgs",
+    "destination_path": "det",
+    "cfg_file_path": "./cfg/yolov3.cfg",
+    "weights_file_path": "./weights/yolov3.weights",
+    "resolution": 416,
+    "confidence": 0.6,
+    "nms_threshold": 0.5,
+    "CUDA": true,
+    "use_torch_weights": false
+  },
+
+  "training_params": {
+    "number_of_epoch": 50,
+    "batch_size": 16,
+    "start_from_checkpoint": false,
+
+    "train_img_dir": "",
+    "train_annot_dir": "",
+    "train_dataset_type": "VOC",
+
+    "valid_img_dir": "",
+    "valid_annot_dir": "",
+    "valid_dataset_type": "COCO"
+  }
+}
