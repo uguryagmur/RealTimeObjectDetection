@@ -2,6 +2,8 @@
   "detector_params": {
     "images_path": "imgs",
     "destination_path": "det",
+    "yolo_version": 5,
+    "yolov5_size": "L",
     "cfg_file_path": "./cfg/yolov3.cfg",
     "weights_file_path": "./weights/yolov3.weights",
     "resolution": 416,

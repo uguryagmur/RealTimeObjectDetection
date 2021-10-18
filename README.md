@@ -65,6 +65,6 @@ For a faster and more convenient training use multiple GPUs.
 ### To Do List
 - [X] Add main file to run the system with parameters
 - [X] Update the user manual
-- [ ] Add YOLOv5 support for detection
-- [ ] Add YOLOv5 support for training
+- [X] Add YOLOv5 support for detection
 - [ ] Add automatic dataset configuration for COCO and VOC datasets
+- [ ] ~~Add YOLOv5 support for training~~

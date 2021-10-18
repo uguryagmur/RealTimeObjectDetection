@@ -1,8 +1,11 @@
 from __future__ import division
+
+import glob
 import os
 import cv2
 import json
 import time
+import tqdm
 import torch
 import random
 import argparse
@@ -11,11 +14,12 @@ import numpy as np
 import pickle as pkl
 import os.path as osp
 import torch.nn as nn
+from PIL import Image
 from src.darknet import Darknet
 from src.util import load_classes, prep_image, write_results
 
 
-class DarknetDetector:
+class Darknetv3Detector:
     def __init__(self, images: str, destination: str, cfg_path: str, weights_path: str, resolution: int,
                  confidence: float, nms_thresh: float, CUDA: bool, TORCH: bool):
         # configuration of argument metrics
@@ -47,7 +51,7 @@ class DarknetDetector:
         assert self.inp_dim % 32 == 0
         assert self.inp_dim > 32
 
-        img_path_list, img_name_list = DarknetDetector.read_directory(self.images)
+        img_path_list, img_name_list = Darknetv3Detector.read_directory(self.images)
         print('Number of Images= ', len(img_path_list))
         batch_gen = self.batch_img_load(img_path_list, self.batch_size)
 
@@ -109,7 +113,7 @@ class DarknetDetector:
         list(map(lambda x: self.box_write(x, loaded_ims), output))
         det_names = pd.Series(img_path_list[i]).apply(
             lambda x: "{}/det_{}_{}".format(self.destination,
-                                            self.cfg_path[4:-4],
+                                            self.cfg_path.split('/')[-1][:-4],
                                             x.split("/")[-1]))
         list(map(cv2.imwrite, det_names, loaded_ims))
 
@@ -248,6 +252,39 @@ class DarknetDetector:
                 yield batch_list, im_batches, im_dim_list, loaded_ims
 
 
+class Darknetv5Detector:
+    def __init__(self, images: str, model_size: str, destination: str):
+        model_name = self.parse_model_size(model_size)
+        self.model = torch.hub.load('ultralytics/yolov5', model_name, pretrained=True).eval()
+        self.images = glob.glob(images + "/*.jpg")
+        self.images.extend(glob.glob(images + "/*.png"))
+        self.destination = destination
+
+    @staticmethod
+    def parse_model_size(model_size):
+        if model_size == 'S':
+            model_name = "yolov5s"
+        elif model_size == 'M':
+            model_name = "yolov5m"
+        elif model_size == 'L':
+            model_name = "yolov5l"
+        elif model_size == 'X':
+            model_name = "yolov5x"
+        else:
+            raise Exception("Unknown YOLOv5 size input")
+        return model_name
+
+    def __call__(self):
+        img = self.images.copy()
+        for i, res_img in enumerate(tqdm.tqdm(img)):
+            img = [res_img]
+            results = self.model(img)
+            results.render()
+            image = Image.fromarray(img[0])
+            path = self.destination + '/det_yolov5_' + self.images[i].split('/')[-1]
+            image.save(path)
+
+
 def arg_parse():
     """Detect file argument configuration"""
 
@@ -260,8 +297,10 @@ def arg_parse():
     parser.add_argument("--det", dest='det',
                         help="Image / Directory to store detections to",
                         default="det", type=str)
-    parser.add_argument("--bs", dest="bs", help="Batch size",
-                        default=1, type=int)
+    parser.add_argument("--version", dest="yolov", help="YOLO version: v3 or v5",
+                        default=5, type=int)
+    parser.add_argument("--yolov5_size", dest="yolov5_size", help="Size for the YOLOv5: S, M, L, XL",
+                        default="L", type=str)
     parser.add_argument("--confidence", dest="confidence",
                         help="Object Confidence to filter predictions",
                         default=0.6, type=float)
@@ -296,5 +335,10 @@ if __name__ == '__main__':
         "CUDA": params.CUDA,
         "TORCH": params.TORCH,
     }
-    detector = DarknetDetector(**detector_params)
+    if params.yolov == 3:
+        detector = Darknetv3Detector(**detector_params)
+    elif params.yolov == 5:
+        detector = Darknetv5Detector(params.images, params.yolov5_size, params.det)
+    else:
+        raise Exception("Unknown YOLO version !!")
     detector()
